@@ -63,11 +63,11 @@ def test_ir(output_dir=None):
     text = str(module)
     assert SHAPE["total"] % SHAPE["lanes"] != 0 and 0 < SHAPE["tail"] < SHAPE["lanes"]
     assert text.count("ave.hir.vor") == 2 + SHAPE["tiles"]
-    assert text.count("ave.hir.vsel") == 2, "ZEROING row and tail row"
+    assert "ave.hir.vsel" not in text, "ZEROING must stay a bare masked op"
     assert text.count("ave.hir.reduction") == 2
     assert "ave.hir.pge <VL8>" in text, "tail predicate must select 8 lanes"
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=3, extra=("ave.hir.vor", "ave.hir.vsel", "ave.hir.reduction"))
+    check_lowered_ir(text, loads=2, stores=1, buffers=3, extra=("ave.hir.vor", "ave.hir.reduction"))
     print("IR PASS: vor full/ZEROING/reduce plus 3 full + 1 tail tile")
 
 

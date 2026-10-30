@@ -14,11 +14,27 @@ otherwise ir only.
 import os
 import re
 from pathlib import Path
+
 import pytest
 
 from triton.language.extra.tla.compiler import ast_to_ttir, lower_ttir
 from triton._C.libtriton import ir, buffer_ir, passes
 from triton._C.libtriton.ascend import ir as ascend_ir
+
+# Test glue only: ``tla.jit`` is a function, but the first decoration runs
+# ``from .jit import TLAJITFunction`` inside it, which rebinds the package
+# attribute ``tla.jit`` to the ``tla.jit`` *module*.  Without this pin only the
+# very first ``@tla.jit`` in a process works, so every later kernel (and every
+# later case file) would fail with "'module' object is not callable".  Pinning
+# the canonical decorator keeps the documented ``@tla.jit`` spelling usable for
+# every module-level kernel.  This does not change the product surface.
+try:
+    import triton.language.extra.tla as _tla
+    from triton.language.extra.tla.jit import TLAJITFunction as _TLAJITFunction
+except Exception:  # stale/native build without the TLA jit module
+    _tla = _TLAJITFunction = None
+if _TLAJITFunction is not None and getattr(_tla, "jit", None) is not _TLAJITFunction:
+    _tla.jit = _TLAJITFunction
 
 # Set TLA_IR_DUMP_DIR=<dir> to also dump the final IR under <dir>/<kernel>/.
 _DUMP_DIR = os.environ.get("TLA_IR_DUMP_DIR")
@@ -148,7 +164,7 @@ def check_kernel_binary(kernel):
     paths = [Path(path) for name, path in kernel.metadata_group.items() if name.endswith((".npubin", ".o"))]
     assert paths, "kernel metadata contains no .npubin/.o artifact"
     assert any(path.is_file() and path.read_bytes() == binary
-               for path in paths), ("generated binary is missing or differs from this kernel's cache artifact")
+               for path in paths), "generated binary is missing or differs from this kernel's cache artifact"
     print("COMPILE PASS:", kernel.name, "->", ", ".join(str(path) for path in paths))
 
 

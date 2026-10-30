@@ -47,8 +47,8 @@ SIGNATURE = {
 
 
 @tla.jit
-def add_cmp_ops(A_ptr, B_ptr, C_ptr, S_ptr, MX_ptr, MN_ptr, M_ptr, C2_ptr, I_ptr, J_ptr, SUM_ptr, CAR_ptr, ULT_ptr,
-                UMAX_ptr, UMIN_ptr, N: tl.constexpr):
+def add_cmp(A_ptr, B_ptr, C_ptr, S_ptr, MX_ptr, MN_ptr, M_ptr, C2_ptr, I_ptr, J_ptr, SUM_ptr, CAR_ptr, ULT_ptr,
+            UMAX_ptr, UMIN_ptr, N: tl.constexpr):
     a_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     b_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     c_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
@@ -143,7 +143,7 @@ def constexprs():
 
 
 def test_ir(output_dir=None):
-    module, ctx = compile_offline(add_cmp_ops, SIGNATURE, constexprs(), output_dir=output_dir)
+    module, ctx = compile_offline(add_cmp, SIGNATURE, constexprs(), output_dir=output_dir)
     module = lower_offline(module, ctx, output_dir=output_dir)
     text = str(module)
     for op in ("ave.hir.vadd", "ave.hir.vadds", "ave.hir.reduction", "ave.hir.vcmp", "ave.hir.vsel"):
@@ -154,7 +154,7 @@ def test_ir(output_dir=None):
     assert "ave.hir.vcmp <ULT>" in text, "unsigned LT should map to ULT"
     assert "ave.hir.reduction <umax>" in text, "unsigned max should be umax"
     assert "ave.hir.reduction <umin>" in text, "unsigned min should be umin"
-    print("IR PASS: add_cmp_ops AVE structure ok (vadd/vadds/vaddc/"
+    print("IR PASS: add_cmp AVE structure ok (vadd/vadds/vaddc/"
           "vcmax/vcmin/vcmp)")
 
 
@@ -176,7 +176,7 @@ def _launch():
     ult = torch.zeros(N, dtype=torch.int32, device="npu")
     umax = torch.zeros(N, dtype=torch.int32, device="npu")
     umin = torch.zeros(N, dtype=torch.int32, device="npu")
-    add_cmp_ops[(1, )](A, B, C, S, MX, MN, m, C2, I, J, total, carry, ult, umax, umin, **constexprs())
+    add_cmp[(1, )](A, B, C, S, MX, MN, m, C2, I, J, total, carry, ult, umax, umin, **constexprs())
     torch.npu.synchronize()
     return (A, B, C, S, MX, MN, m, C2, I, J, total, carry, ult, umax, umin)
 
@@ -185,7 +185,7 @@ def test_compile():
     _launch()
     artifacts = check_compile_artifacts()
     assert artifacts, "no .o/.npubin artifact in TRITON_CACHE_DIR"
-    print("COMPILE PASS: add_cmp_ops generated artifacts", len(artifacts), "->", artifacts[0])
+    print("COMPILE PASS: add_cmp generated artifacts", len(artifacts), "->", artifacts[0])
 
 
 def test_run():
@@ -201,7 +201,7 @@ def test_run():
     ok &= np.isclose(MN.cpu().numpy()[0], a.min(), atol=1e-5)
     ok &= np.array_equal(m.cpu().numpy(), (a > b).astype(np.int32))
     ref_c2 = a + b
-    ref_c2[N // 2:] = a[N // 2:]  # MERGING keeps src0 on masked-out lanes
+    ref_c2[N // 2:] = 0.0  # MERGING merges +0 into masked-out lanes
     ok &= np.allclose(C2.cpu().numpy(), ref_c2, atol=1e-5)
     ref_sum = (i.astype(np.uint32) + j.astype(np.uint32)).astype(np.uint32)
     ref_carry = (((i.astype(np.uint32).astype(np.uint64) + j.astype(np.uint32).astype(np.uint64)) >> 32)
@@ -215,7 +215,7 @@ def test_run():
     ok &= umax_got == iu.max()
     ok &= umin_got == iu.min()
     print("ADD_CMP", "OK" if ok else "MISMATCH")
-    assert ok, "add_cmp_ops e2e mismatch"
+    assert ok, "add_cmp e2e mismatch"
 
 
 def main():
@@ -226,7 +226,7 @@ def main():
         test_compile()
     if do_run:
         test_run()
-    print("ALL PASS: add_cmp_ops", "ir" if do_ir else "", "compile" if do_compile else "", "run" if do_run else "")
+    print("ALL PASS: add_cmp", "ir" if do_ir else "", "compile" if do_compile else "", "run" if do_run else "")
 
 
 if __name__ == "__main__":

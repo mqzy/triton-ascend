@@ -63,13 +63,13 @@ def _load_simd():
 
 simd = _load_simd()
 
-
 # --------------------------------------------------------------------------
 # mock builder
 # --------------------------------------------------------------------------
 
 
 class _Handle:
+
     def __init__(self, ty):
         self.ty = ty
 
@@ -119,6 +119,7 @@ class _Recorder:
 
 
 class _Semantic:
+
     def __init__(self):
         self.builder = _Recorder()
 
@@ -142,8 +143,7 @@ def _last(sem):
 
 
 def test_exports_and_module_mode_constants():
-    for name in ("MODE", "POS", "vdiv", "vmax", "vmin", "vmaxs", "vexp",
-                 "vdup", "vdups", "vdupv"):
+    for name in ("MODE", "POS", "vdiv", "vmax", "vmin", "vmaxs", "vexp", "vdup", "vdups", "vdupv"):
         assert name in simd.__all__, f"{name} missing from simd.__all__"
         assert hasattr(simd, name), f"{name} missing from simd"
     assert simd.MODE.ZEROING == "MODE_ZEROING"
@@ -226,8 +226,7 @@ def test_vdiv_unsigned_masked_appends_explicit_zeroing_select():
         # workaround must NOT stack a second select on top of the builder's
         # zero-init + vsel merge.
         sem_m = _Semantic()
-        simd.vdiv(_vec(64, dtype), _vec(64, dtype), mask=m,
-                  mode=simd.MODE.MERGING, _semantic=sem_m)
+        simd.vdiv(_vec(64, dtype), _vec(64, dtype), mask=m, mode=simd.MODE.MERGING, _semantic=sem_m)
         calls_m = sem_m.builder.calls
         assert calls_m[-1][0] == "binary", (dtype, calls_m)
         assert calls_m[-1][1][4] == "merging", (dtype, calls_m)
@@ -437,8 +436,7 @@ def test_vdup_dtype_aliases_resolve_to_canonical_names():
         assert simd._is_unsigned(got_dtype) == dtype.is_int_unsigned(), name
 
     # dtype objects are passed through unchanged (including unsigned)
-    for dtype in (tl.int8, tl.uint8, tl.int32, tl.uint64, tl.float16,
-                  tl.bfloat16, tl.float8e4nv):
+    for dtype in (tl.int8, tl.uint8, tl.int32, tl.uint64, tl.float16, tl.bfloat16, tl.float8e4nv):
         got_tag, got_dtype = simd._resolve_element_dtype(dtype)
         assert got_dtype == dtype
         assert got_tag == simd._elem_tag(dtype)
@@ -553,8 +551,8 @@ def test_mode_zeroing_and_merging_reach_the_builder_distinctly():
         assert name == "vdup"
         assert call[3] is mask.handle, mode
         modes[str(mode).upper()] = call[4]
-    assert modes == {"MODE_ZEROING": "zeroing", "ZEROING": "zeroing",
-                     "MODE_MERGING": "merging", "MERGING": "merging"}, modes
+    assert modes == {"MODE_ZEROING": "zeroing", "ZEROING": "zeroing", "MODE_MERGING": "merging", "MERGING":
+                     "merging"}, modes
 
     # vdups must share vdup's mode forwarding, not re-hardcode zeroing
     sem = _Semantic()
@@ -572,15 +570,14 @@ def test_mode_zeroing_and_merging_reach_the_builder_distinctly():
 def test_precision_tiers():
     # hardware tiers are accepted and change nothing
     for precision in (None, "ftz_true", "FTZ_TRUE", tl.constexpr("ftz_true")):
-        for op, args in ((simd.vdiv, (_vec(64, tl.float32), _vec(64, tl.float32))),
-                         (simd.vexp, (_vec(64, tl.float32), ))):
+        for op, args in ((simd.vdiv, (_vec(64, tl.float32), _vec(64, tl.float32))), (simd.vexp, (_vec(64,
+                                                                                                      tl.float32), ))):
             sem = _Semantic()
             op(*args, precision=precision, _semantic=sem)
             assert "divfhp" not in str(sem.builder.calls[-1])
     # the undocumented TileLang-free 'intrinsic' alias is not exposed
     with pytest.raises(ValueError, match="invalid precision"):
-        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), precision="intrinsic",
-                  _semantic=_Semantic())
+        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), precision="intrinsic", _semantic=_Semantic())
     with pytest.raises(ValueError, match="invalid precision"):
         simd.vexp(_vec(64, tl.float32), precision="intrinsic", _semantic=_Semantic())
     # vexp's subnormal-preserving algorithm has no committed AVE lowering:
@@ -589,8 +586,7 @@ def test_precision_tiers():
         with pytest.raises(NotImplementedError, match="vexp_1ulp_ftz_false"):
             simd.vexp(_vec(64, tl.float32), precision=precision, _semantic=_Semantic())
     with pytest.raises(ValueError, match="invalid precision"):
-        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), precision="0ulp",
-                  _semantic=_Semantic())
+        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), precision="0ulp", _semantic=_Semantic())
 
 
 def test_vdiv_exact_uses_vdivfhp_and_forwards_mask():
@@ -598,8 +594,7 @@ def test_vdiv_exact_uses_vdivfhp_and_forwards_mask():
     mask = _mask(64)
     for precision in ("exact", "EXACT", "vdiv_0ulp_ftz_true"):
         sem = _Semantic()
-        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), mask=mask,
-                  precision=precision, _semantic=sem)
+        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), mask=mask, precision=precision, _semantic=sem)
         name, call = _last(sem)
         assert (name, call[0]) == ("binary", "divfhp"), (precision, sem.builder.calls)
         assert call[3] is mask.handle, precision
@@ -608,19 +603,17 @@ def test_vdiv_exact_uses_vdivfhp_and_forwards_mask():
     # MERGING on the precise path still reaches the builder while the dtype
     # restriction is unchanged.
     sem = _Semantic()
-    simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), mask=mask,
-              precision="exact", mode=simd.MODE.MERGING, _semantic=sem)
+    simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), mask=mask, precision="exact", mode=simd.MODE.MERGING,
+              _semantic=sem)
     assert _last(sem)[1][0] == "divfhp"
     assert _last(sem)[1][4] == "merging"
     # exact is f32-only, matching TileLang's fp32-only precise wrappers
     for dtype in (tl.float16, tl.int32, tl.uint32):
         with pytest.raises(ValueError, match="requires float32"):
-            simd.vdiv(_vec(64, dtype), _vec(64, dtype), precision="exact",
-                      _semantic=_Semantic())
+            simd.vdiv(_vec(64, dtype), _vec(64, dtype), precision="exact", _semantic=_Semantic())
     # ftz_false is not a vdiv tier
     with pytest.raises(ValueError, match="invalid precision"):
-        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), precision="ftz_false",
-                  _semantic=_Semantic())
+        simd.vdiv(_vec(64, tl.float32), _vec(64, tl.float32), precision="ftz_false", _semantic=_Semantic())
 
 
 def test_all_eight_apis_forward_the_exact_custom_mask_handle():
@@ -656,14 +649,11 @@ def test_mask_validation_and_custom_mask():
     assert all(c[0] != "pge" for c in sem.builder.calls)
 
     with pytest.raises(ValueError, match="mask must be vector"):
-        simd.vmax(_vec(64, tl.float32), _vec(64, tl.float32), mask=_mask(32),
-                  _semantic=_Semantic())
+        simd.vmax(_vec(64, tl.float32), _vec(64, tl.float32), mask=_mask(32), _semantic=_Semantic())
     with pytest.raises(ValueError, match="mask must be vector"):
-        simd.vmaxs(_vec(64, tl.float32), 1.0, mask=_mask(64, tl.float32),
-                   _semantic=_Semantic())
+        simd.vmaxs(_vec(64, tl.float32), 1.0, mask=_mask(64, tl.float32), _semantic=_Semantic())
     with pytest.raises(TypeError, match="mask must be a tla.vector"):
-        simd.vmax(_vec(64, tl.float32), _vec(64, tl.float32), mask=1,
-                  _semantic=_Semantic())
+        simd.vmax(_vec(64, tl.float32), _vec(64, tl.float32), mask=1, _semantic=_Semantic())
 
 
 def test_operand_type_mismatch():
@@ -680,8 +670,7 @@ def test_dtype_support_is_enforced_per_op():
         (lambda s: simd.vexp(_vec(64, tl.bfloat16), _semantic=s), "vexp", "bf16"),
         (lambda s: simd.vexp(_vec(64, tl.int32), _semantic=s), "vexp", "i32"),
         (lambda s: simd.vdiv(_vec(64, tl.int8), _vec(64, tl.int8), _semantic=s), "vdiv", "i8"),
-        (lambda s: simd.vdiv(_vec(64, tl.bfloat16), _vec(64, tl.bfloat16), _semantic=s), "vdiv",
-         "bf16"),
+        (lambda s: simd.vdiv(_vec(64, tl.bfloat16), _vec(64, tl.bfloat16), _semantic=s), "vdiv", "bf16"),
         (lambda s: simd.vmaxs(_vec(64, tl.bfloat16), 0.0, _semantic=s), "vmaxs", "bf16"),
         (lambda s: simd.vdup(0.0, tl.int64, _semantic=s), "vdup", "i64"),
     ]
@@ -743,10 +732,9 @@ def test_new_bindings_and_ave_ops_are_present():
         assert f'"{name}"' in cpp, f"{name} not bound"
         assert f"'{name}'" in builder_py, f"{name} not whitelisted"
     # each API must map to its own AVE op, not to a reduce/splat stand-in
-    for ave_op in ("hivmave::VFDivOp", "hivmave::VFDivFHPOp", "hivmave::VFExpOp",
-                   "hivmave::VFBroadcastScalarMaskOp",
-                   "hivmave::VFMaxOp", "hivmave::VFMinOp", "hivmave::VMaxUIOp",
-                   "hivmave::VMinUIOp", "hivmave::VFMaxsOp", "hivmave::VMaxsUIOp"):
+    for ave_op in ("hivmave::VFDivOp", "hivmave::VFDivFHPOp", "hivmave::VFExpOp", "hivmave::VFBroadcastScalarMaskOp",
+                   "hivmave::VFMaxOp", "hivmave::VFMinOp", "hivmave::VMaxUIOp", "hivmave::VMinUIOp",
+                   "hivmave::VFMaxsOp", "hivmave::VMaxsUIOp"):
         assert ave_op in cpp, f"{ave_op} missing from tla_builder.cc"
     assert '"divfhp"' in cpp, "VFDivFHPOp builder kind is not dispatched"
     # vdup must not be routed through the unmasked scalar_broadcast
@@ -764,8 +752,7 @@ def test_new_bindings_and_ave_ops_are_present():
     assert "hivmave::VFSelectOp" in mode_block
     assert "(void)mode" not in cpp
     # every mode-taking binding exposes the default and forwards it
-    for binding in ("create_simd_binary", "create_simd_binary_scalar",
-                    "create_simd_unary", "create_simd_vdup",
+    for binding in ("create_simd_binary", "create_simd_binary_scalar", "create_simd_unary", "create_simd_vdup",
                     "create_simd_vbroadcast"):
         start = cpp.index(f'"{binding}"')
         block = cpp[start:cpp.index(".def(", start)]
@@ -777,8 +764,7 @@ def test_public_names_are_defined_and_documented():
     src = (_TLA_DIR / "simd.py").read_text()
     tree = ast.parse(src)
     defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
-    for name in ("vdiv", "vmax", "vmin", "vmaxs", "vexp", "vdup",
-                 "vdups", "vdupv"):
+    for name in ("vdiv", "vmax", "vmin", "vmaxs", "vexp", "vdup", "vdups", "vdupv"):
         assert name in defined, f"{name} not defined in simd.py"
         node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
         assert ast.get_docstring(node), f"{name} has no docstring"

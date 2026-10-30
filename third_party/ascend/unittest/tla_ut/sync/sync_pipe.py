@@ -12,7 +12,7 @@ real dependency chain still produces the right values.
 Stages (env TLA_TEST_STAGE, default all with auto-degrade):
   ir      : offline HIVM/AVE IR structure (no NPU, no torch)
   compile : full compile, confirm .o/.npubin artifacts exist
-  run     : real-device launch + accuracy (SYNC_INTRA OK)
+  run     : real-device launch + accuracy (SYNC_PIPE OK)
 """
 import os
 import sys
@@ -30,7 +30,7 @@ SIGNATURE = {"A_ptr": "*fp32", "B_ptr": "*fp32", "O_ptr": "*fp32"}
 
 
 @tla.jit
-def sync_intra(A_ptr, B_ptr, O_ptr, N: tl.constexpr):
+def sync_pipe(A_ptr, B_ptr, O_ptr, N: tl.constexpr):
     a_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     b_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     o_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
@@ -99,7 +99,7 @@ def test_enum_pipes():
 
 
 def test_ir(output_dir=None):
-    module, ctx = compile_offline(sync_intra, SIGNATURE, constexprs(), output_dir=output_dir)
+    module, ctx = compile_offline(sync_pipe, SIGNATURE, constexprs(), output_dir=output_dir)
     text = str(lower_offline(module, ctx, output_dir=output_dir))
     check_lowered_ir(text, loads=2, stores=1, buffers=3)
     for op in ("hivm.hir.set_flag", "hivm.hir.wait_flag", "hivm.hir.pipe_barrier", "hivm.hir.sync_block"):
@@ -116,7 +116,7 @@ def test_ir(output_dir=None):
         for op in ("hivm.hir.set_flag", "hivm.hir.wait_flag", "ave.hir.vadd", "hivm.hir.pipe_barrier", "hivm.hir.store")
     ]
     assert order == sorted(order), "sync ops must stay between the stages"
-    print("IR PASS: sync_intra (MTE2->V->MTE3 hand sync, barrier, sync_all)")
+    print("IR PASS: sync_pipe (MTE2->V->MTE3 hand sync, barrier, sync_all)")
     test_enum_pipes()
 
 
@@ -125,7 +125,7 @@ def _launch():
     A = torch.randn(N, dtype=torch.float32, device="npu")
     B = torch.randn(N, dtype=torch.float32, device="npu")
     O = torch.full((N, ), -7.0, dtype=torch.float32, device="npu")
-    sync_intra[(1, )](A, B, O, **constexprs())
+    sync_pipe[(1, )](A, B, O, **constexprs())
     torch.npu.synchronize()
     return A, B, O
 
@@ -134,7 +134,7 @@ def test_compile():
     _launch()
     artifacts = check_compile_artifacts()
     assert artifacts, "no .o/.npubin artifact in TRITON_CACHE_DIR"
-    print("COMPILE PASS: sync_intra")
+    print("COMPILE PASS: sync_pipe")
 
 
 def test_run():
@@ -142,8 +142,8 @@ def test_run():
     A, B, O = _launch()
     ref = A.cpu().numpy() + B.cpu().numpy()
     ok = np.allclose(O.cpu().numpy(), ref, atol=0.0, rtol=0.0)
-    print("SYNC_INTRA", "OK" if ok else "MISMATCH")
-    assert ok, "sync_intra accuracy mismatch"
+    print("SYNC_PIPE", "OK" if ok else "MISMATCH")
+    assert ok, "sync_pipe accuracy mismatch"
 
 
 def main():
@@ -154,7 +154,7 @@ def main():
         test_compile()
     if do_run:
         test_run()
-    print("ALL PASS: sync_intra", "ir" if do_ir else "", "compile" if do_compile else "", "run" if do_run else "")
+    print("ALL PASS: sync_pipe", "ir" if do_ir else "", "compile" if do_compile else "", "run" if do_run else "")
 
 
 if __name__ == "__main__":

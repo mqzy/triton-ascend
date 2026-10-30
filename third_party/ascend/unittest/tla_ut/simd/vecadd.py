@@ -31,7 +31,7 @@ SIGNATURE = {"A_ptr": "*fp32", "B_ptr": "*fp32", "O_ptr": "*fp32"}
 
 
 @tla.jit
-def vecadd_simd(A_ptr, B_ptr, O_ptr, N: tl.constexpr):
+def vecadd(A_ptr, B_ptr, O_ptr, N: tl.constexpr):
     a_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     b_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     o_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
@@ -54,14 +54,14 @@ def constexprs():
 
 
 def test_ir(output_dir=None):
-    module, ctx = compile_offline(vecadd_simd, SIGNATURE, constexprs(), output_dir=output_dir)
+    module, ctx = compile_offline(vecadd, SIGNATURE, constexprs(), output_dir=output_dir)
     text = str(lower_offline(module, ctx, output_dir=output_dir))
     check_lowered_ir(text, loads=2, stores=1, buffers=3)
     tiles = N // LANES
     assert text.count("ave.hir.vadd") == tiles, text
     assert text.count("ave.hir.vload") == 2 * tiles, text
     assert text.count("ave.hir.masked_store") == tiles, text
-    print(f"IR PASS: vecadd_simd ({tiles} register adds over {N} elements)")
+    print(f"IR PASS: vecadd ({tiles} register adds over {N} elements)")
 
 
 def _launch():
@@ -69,7 +69,7 @@ def _launch():
     A = torch.randn(N, dtype=torch.float32, device="npu")
     B = torch.randn(N, dtype=torch.float32, device="npu")
     O = torch.full((N, ), -7.0, dtype=torch.float32, device="npu")
-    vecadd_simd[(1, )](A, B, O, **constexprs())
+    vecadd[(1, )](A, B, O, **constexprs())
     torch.npu.synchronize()
     return A, B, O
 
@@ -78,7 +78,7 @@ def test_compile():
     _launch()
     artifacts = check_compile_artifacts()
     assert artifacts, "no .o/.npubin artifact in TRITON_CACHE_DIR"
-    print("COMPILE PASS: vecadd_simd")
+    print("COMPILE PASS: vecadd")
 
 
 def test_run():
@@ -86,7 +86,7 @@ def test_run():
     A, B, O = _launch()
     ok = np.allclose(O.cpu().numpy(), A.cpu().numpy() + B.cpu().numpy(), atol=0.0, rtol=0.0)
     print("VECADD_SIMD", "OK" if ok else "MISMATCH")
-    assert ok, "vecadd_simd accuracy mismatch"
+    assert ok, "vecadd accuracy mismatch"
 
 
 def main():
@@ -97,7 +97,7 @@ def main():
         test_compile()
     if do_run:
         test_run()
-    print("ALL PASS: vecadd_simd", "ir" if do_ir else "", "compile" if do_compile else "", "run" if do_run else "")
+    print("ALL PASS: vecadd", "ir" if do_ir else "", "compile" if do_compile else "", "run" if do_run else "")
 
 
 if __name__ == "__main__":

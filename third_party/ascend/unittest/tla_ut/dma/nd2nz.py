@@ -21,9 +21,9 @@ def roundtrip(X, Y, P: tl.constexpr):
         l1 = tla.alloc((2, 1, 16, 16), tl.float16, space="l1")
         tla.load_gm_to_l1(tla.view(X, (16, 32)), l1, P)
         tla.copy_l1_to_ub(l1, out, tla.CopyL12UBParams())
-        tla.sync.block_set_flag(2, "PIPE_MTE1", 0)
+        tla.sync.block_set_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.MTE1, 0)
     with tla.scope.vector():
-        tla.sync.block_wait_flag("PIPE_S", 0, mode=2)
+        tla.sync.block_wait_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.S, 0)
         # L12UB writes the first AIV's UB; the second AIV must not overwrite GM.
         if tla.sub_block_id() == 0:
             tla.store_ub_to_gm(out, tla.view(Y, (16, 32)), tla.StoreUB2GMParams())

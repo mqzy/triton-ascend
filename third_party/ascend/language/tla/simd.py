@@ -416,25 +416,9 @@ def _mask_for(mask, lanes, _semantic):
     return mask
 
 
-def _is_unsigned(dtype_):
-    return str(dtype_).startswith("uint")
-
-
 def _masked_binary(kind, lhs, rhs, mask, mode, _semantic):
     """Elementwise binary op under an explicit mask and predicate mode."""
-    _require_vector(lhs, "src0")
-    _require_vector(rhs, "src1")
-    if lhs.type != rhs.type:
-        raise ValueError(f"{kind} requires same-typed operands, "
-                         f"got {lhs.type} and {rhs.type}")
-    lanes = lhs.type.lanes
-    mode = _resolve_mode(mode)
-    mask = _mask_for(mask, lanes, _semantic)
-    handle = _semantic.builder.create_simd_binary(kind, lhs.handle, rhs.handle, mask.handle)
-    out = vector(handle, lhs.type)
-    if mode == "MERGING":
-        out = vsel(mask, out, lhs, _semantic=_semantic)
-    return out
+    return _binary(kind, lhs, rhs, _semantic, mask=mask, mode=mode)
 
 
 def _resolve_base_and_indices(ptr_or_buffer, offsets, _semantic):
@@ -594,6 +578,8 @@ def _make_scalar(scalar, dtype, tag, op, _semantic):
         if value.type.is_block():
             raise TypeError(f"{op} scalar must be a scalar value, got {value.type}")
         if value.dtype != dtype:
+            if value.dtype.is_int() and not value.dtype.is_bool() and dtype.is_int():
+                return _semantic.cast(value, dtype).handle
             raise TypeError(f"{op} scalar dtype must match the vector element "
                             f"type {dtype}, got {value.dtype}")
         return value.handle
@@ -808,7 +794,8 @@ def vadd(src0: vector, src1: vector, mask: vector = None, mode: tl.constexpr = M
     :param src1: second vector register (same type as ``src0``)
     :param mask: predicate register; defaults to an all-true mask
     :param mode: ``MODE.ZEROING`` (default) or ``MODE.MERGING``.  MERGING
-        keeps ``src0`` on inactive lanes and is implemented as a select.
+        materializes a same-typed ``+0`` merge source and selects it for the
+        inactive lanes; it does not preserve ``src0``.
     """
     return _masked_binary("add", src0, src1, mask, mode, _semantic)
 
@@ -860,13 +847,11 @@ def vadds(src: vector, scalar, mask: vector = None, mode: tl.constexpr = MODE.ZE
     _require_vector(src, "src")
     lanes = src.type.lanes
     scalar_handle = _scalar_handle(src, scalar, _semantic)
-    mode = _resolve_mode(mode)
-    mask = _mask_for(mask, lanes, _semantic)
-    handle = _semantic.builder.create_simd_vec_scalar("adds", src.handle, scalar_handle, mask.handle)
-    out = vector(handle, src.type)
-    if mode == "MERGING":
-        out = vsel(mask, out, src, _semantic=_semantic)
-    return out
+    mode = _check_mode(mode)
+    mask = _resolve_mask(mask, lanes, _semantic)
+    handle = _semantic.builder.create_simd_binary_scalar("adds", src.handle, scalar_handle, mask.handle,
+                                                         _MODE_BUILDER_NAMES[mode])
+    return vector(handle, src.type)
 
 
 @builtin
@@ -1210,14 +1195,12 @@ def vmins(src, scalar, mask=None, mode=MODE.ZEROING, _semantic=None) -> vector:
     tag = _elem_tag(src.dtype)
     if tag not in ("i8", "i16", "i32", "f16", "f32"):
         raise ValueError(f"vmins does not support {src.dtype} registers")
-    mode = _resolve_mode(mode)
-    mask = _mask_for(mask, src.type.lanes, _semantic)
+    mode = _check_mode(mode)
+    mask = _resolve_mask(mask, src.type.lanes, _semantic)
     scalar_handle = _make_scalar(scalar, src.dtype, tag, "vmins", _semantic)
     handle = _semantic.builder.create_simd_binary_scalar("umins" if _is_unsigned(src.dtype) else "mins", src.handle,
-                                                         scalar_handle, mask.handle)
-    result = vector(handle, src.type)
-    zero = vfull(0, src.dtype, src.type.lanes, _semantic=_semantic)
-    return vsel(mask, result, src if mode == "MERGING" else zero, _semantic=_semantic)
+                                                         scalar_handle, mask.handle, _MODE_BUILDER_NAMES[mode])
+    return vector(handle, src.type)
 
 
 @builtin

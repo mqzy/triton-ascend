@@ -24,13 +24,13 @@ def transfer(X, Y, N: tl.constexpr):
             src = tla.alloc((N // 16, 1, 16, 16), tl.float16)
             tla.load_gm_to_ub(tla.view(X, (N // 16, 1, 16, 16)), src)
             tla.copy_ub_to_l1(src, l1, tla.CopyUB2L1Params())
-        tla.sync.block_set_flag(2, "PIPE_MTE3", 0)
+        tla.sync.block_set_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.MTE3, 0)
     with tla.scope.cube():
-        tla.sync.block_wait_flag("PIPE_S", 0, mode=2)
+        tla.sync.block_wait_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.S, 0)
         tla.copy_l1_to_ub(l1, out, tla.CopyL12UBParams())
-        tla.sync.block_set_flag(2, "PIPE_MTE1", 1)
+        tla.sync.block_set_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.MTE1, 1)
     with tla.scope.vector():
-        tla.sync.block_wait_flag("PIPE_S", 1, mode=2)
+        tla.sync.block_wait_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.S, 1)
         if tla.sub_block_id() == 0:
             tla.store_ub_to_gm(out, tla.view(Y, (16, N)))
 

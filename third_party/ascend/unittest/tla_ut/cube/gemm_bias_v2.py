@@ -36,9 +36,9 @@ def gemm_bias_v2(A, B, Y, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, BIA
             acc, product_ub,
             tla.FixpipeL0C2UBParams(dma_mode=tla.FixpipeDMAMode.NZ2ND, dual_dst_mode=tla.FixpipeDualDstMode.ROW_SPLIT,
                                     sub_block_idx=None))
-        tla.sync.block_set_flag(2, "PIPE_FIX", 0)
+        tla.sync.block_set_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.F, 0)
     with tla.scope.vector():
-        tla.sync.block_wait_flag("PIPE_S", 0, mode=2)
+        tla.sync.block_wait_flag(tla.sync.MODE.BLOCK, tla.sync.PIPE.S, 0)
         with tla.scope.simd():
             bias = tla.simd.vfull(BIAS, tl.float32, 64)
             for row in tl.static_range(M // 2):

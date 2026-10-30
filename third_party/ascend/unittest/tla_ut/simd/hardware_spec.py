@@ -80,9 +80,9 @@ WIDTH_SIGNATURE = {
 
 
 @tla.jit
-def simd_hardware_spec(A_ptr, B_ptr, C_ptr, C2_ptr, S_ptr, S2_ptr, MX_ptr, MN_ptr, I_ptr, J_ptr, EQ_ptr, NE_ptr, GT_ptr,
-                       GE_ptr, LT_ptr, LE_ptr, ULT_ptr, UGT_ptr, UGE_ptr, ULE_ptr, SUM_ptr, CAR_ptr, USUM_ptr, UCAR_ptr,
-                       UMAX_ptr, UMIN_ptr, N: tl.constexpr, SCALAR: tl.constexpr, SCALAR_MERGE: tl.constexpr):
+def hardware_spec(A_ptr, B_ptr, C_ptr, C2_ptr, S_ptr, S2_ptr, MX_ptr, MN_ptr, I_ptr, J_ptr, EQ_ptr, NE_ptr, GT_ptr,
+                  GE_ptr, LT_ptr, LE_ptr, ULT_ptr, UGT_ptr, UGE_ptr, ULE_ptr, SUM_ptr, CAR_ptr, USUM_ptr, UCAR_ptr,
+                  UMAX_ptr, UMIN_ptr, N: tl.constexpr, SCALAR: tl.constexpr, SCALAR_MERGE: tl.constexpr):
     a_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     b_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
     c_ub = tla.alloc_buffer((N, ), tl.float32, space="ub")
@@ -253,7 +253,7 @@ def width_constexprs():
 
 
 def test_ir(output_dir=None):
-    module, ctx = compile_offline(simd_hardware_spec, SIGNATURE, constexprs(), output_dir=output_dir)
+    module, ctx = compile_offline(hardware_spec, SIGNATURE, constexprs(), output_dir=output_dir)
     text = str(lower_offline(module, ctx, output_dir=output_dir))
     for op in ("ave.hir.vadd", "ave.hir.vadds", "ave.hir.reduction", "ave.hir.vcmp", "ave.hir.vsel"):
         assert op in text, f"missing {op}"
@@ -292,7 +292,7 @@ def _launch():
     i32 = lambda: torch.zeros(N, dtype=torch.int32, device="npu")
     outputs = [f32() for _ in range(6)] + [i32() for _ in range(16)]
     # Kernel ABI: A, B, six f32 outputs, I, J, sixteen i32 outputs.
-    simd_hardware_spec[(1, )](A, B, *outputs[:6], I, J, *outputs[6:], **constexprs())
+    hardware_spec[(1, )](A, B, *outputs[:6], I, J, *outputs[6:], **constexprs())
     torch.npu.synchronize()
     return (A, B, I, J, *outputs)
 
@@ -301,7 +301,7 @@ def test_compile():
     _launch()
     artifacts = check_compile_artifacts()
     assert artifacts, "no .o/.npubin artifact in TRITON_CACHE_DIR"
-    print("COMPILE PASS: simd_hardware_spec")
+    print("COMPILE PASS: hardware_spec")
 
 
 def test_run():
@@ -315,11 +315,11 @@ def test_run():
 
     ok &= np.allclose(C.cpu().numpy(), a + b, atol=1e-5)
     ref_c2 = a + b
-    ref_c2[N // 2:] = a[N // 2:]
+    ref_c2[N // 2:] = 0.0
     ok &= np.allclose(C2.cpu().numpy(), ref_c2, atol=1e-5)
     ok &= np.allclose(S.cpu().numpy(), a + np.float32(SCALAR), atol=1e-5)
     ref_s2 = a + np.float32(SCALAR_MERGE)
-    ref_s2[N // 2:] = a[N // 2:]
+    ref_s2[N // 2:] = 0.0
     ok &= np.allclose(S2.cpu().numpy(), ref_s2, atol=1e-5)
     ok &= np.isclose(MX.cpu().numpy()[0], a.max(), atol=1e-5)
     ok &= np.isclose(MN.cpu().numpy()[0], a.min(), atol=1e-5)
@@ -351,7 +351,7 @@ def test_run():
     ok &= umin_got == iu.min()
 
     print("SIMD_SPEC", "OK" if ok else "MISMATCH")
-    assert ok, "simd_hardware_spec e2e mismatch"
+    assert ok, "hardware_spec e2e mismatch"
 
 
 def main():
@@ -362,8 +362,7 @@ def main():
         test_compile()
     if do_run:
         test_run()
-    print("ALL PASS: simd_hardware_spec", "ir" if do_ir else "", "compile" if do_compile else "",
-          "run" if do_run else "")
+    print("ALL PASS: hardware_spec", "ir" if do_ir else "", "compile" if do_compile else "", "run" if do_run else "")
 
 
 if __name__ == "__main__":

@@ -41,8 +41,8 @@ def sync_intra(A_ptr, B_ptr, O_ptr, N: tl.constexpr):
     tla.copy(a, a_ub)
     tla.copy(b, b_ub)
     # GM -> UB must finish before the vector stage reads the buffers.
-    tla.sync.set_flag("MTE2", "V", 0)
-    tla.sync.wait_flag("MTE2", "V", 0)
+    tla.sync.set_flag(tla.sync.PIPE.MTE2, tla.sync.PIPE.V, 0)
+    tla.sync.wait_flag(tla.sync.PIPE.MTE2, tla.sync.PIPE.V, 0)
 
     with tla.scope.simd():
         av = tla.simd.vlds(a_ub[0], dist="NORM")
@@ -50,9 +50,9 @@ def sync_intra(A_ptr, B_ptr, O_ptr, N: tl.constexpr):
         tla.simd.vsts(o_ub[0], tla.simd.vadd(av, bv), dist="NORM_B32")
 
     # Vector register writes must be visible before the UB -> GM store.
-    tla.sync.barrier("ALL")
-    tla.sync.set_flag("V", "MTE3", 1)
-    tla.sync.wait_flag("V", "MTE3", 1)
+    tla.sync.barrier(tla.sync.PIPE.ALL)
+    tla.sync.set_flag(tla.sync.PIPE.V, tla.sync.PIPE.MTE3, 1)
+    tla.sync.wait_flag(tla.sync.PIPE.V, tla.sync.PIPE.MTE3, 1)
     tla.copy(o_ub, o)
 
     # Hardware barrier across the AIV blocks after the GM writes.
@@ -61,6 +61,41 @@ def sync_intra(A_ptr, B_ptr, O_ptr, N: tl.constexpr):
 
 def constexprs():
     return {"N": N}
+
+
+@tla.jit
+def enum_pipes(PIPE: tl.constexpr, CUBE: tl.constexpr):
+    if CUBE:
+        with tla.scope.cube():
+            tla.sync.barrier(PIPE)
+            tla.sync.set_flag(tla.sync.PIPE.S, PIPE, 0)
+            tla.sync.wait_flag(tla.sync.PIPE.S, PIPE, 0)
+    else:
+        tla.sync.barrier(PIPE)
+        tla.sync.set_flag(tla.sync.PIPE.S, PIPE, 0)
+        tla.sync.wait_flag(tla.sync.PIPE.S, PIPE, 0)
+
+
+def test_enum_pipes():
+    for cube, pipes in (
+        (False, (tla.sync.PIPE.S, tla.sync.PIPE.V, tla.sync.PIPE.MTE2, tla.sync.PIPE.MTE3)),
+        (True, (tla.sync.PIPE.S, tla.sync.PIPE.M, tla.sync.PIPE.MTE1, tla.sync.PIPE.MTE2, tla.sync.PIPE.MTE3,
+                tla.sync.PIPE.F)),
+    ):
+        for pipe in pipes:
+            module, ctx = compile_offline(enum_pipes, {}, {"PIPE": pipe, "CUBE": cube})
+            text = str(lower_offline(module, ctx))
+            assert f"hivm.hir.pipe_barrier[<{pipe.value}>]" in text, text
+            for op in ("set_flag", "wait_flag"):
+                assert f"hivm.hir.{op}[<PIPE_S>, <{pipe.value}>" in text, text
+    for pipe in ("MTE2", "PIPE_S", 0):
+        try:
+            compile_offline(enum_pipes, {}, {"PIPE": pipe, "CUBE": False})
+        except Exception as exc:
+            assert "pipe must be a compile-time tla.sync.PIPE enum member" in str(exc), str(exc)
+        else:
+            raise AssertionError(f"non-enum pipe accepted: {pipe}")
+    print("IR PASS: Vector/Cube pipeline enums and non-enum rejection")
 
 
 def test_ir(output_dir=None):
@@ -82,6 +117,7 @@ def test_ir(output_dir=None):
     ]
     assert order == sorted(order), "sync ops must stay between the stages"
     print("IR PASS: sync_intra (MTE2->V->MTE3 hand sync, barrier, sync_all)")
+    test_enum_pipes()
 
 
 def _launch():

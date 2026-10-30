@@ -50,10 +50,10 @@ def gemm_bias(A_ptr, B_ptr, C_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.const
         tla.cube.mmad(a_l1, b_l1, c_l0c, clear_accum=True)  # hivm.hir.mmadL1
         tla.copy(c_l0c, c_ub)  # hivm.hir.fixpipe (NZ -> ND into UB)
         # AIC: signal the handoff only after fixpipe has written c_ub.
-        tla.sync.block_set_flag(0, "FIX", FLAG)
+        tla.sync.block_set_flag(tla.sync.MODE.INTER, tla.sync.PIPE.F, FLAG)
     with tla.scope.vector():
         # AIV: wait for the cube handoff before the SIMD stage reads c_ub.
-        tla.sync.block_wait_flag("V", FLAG)
+        tla.sync.block_wait_flag(tla.sync.MODE.INTER, tla.sync.PIPE.V, FLAG)
         with tla.scope.simd():
             bias = tla.simd.vfull(BIAS, tl.float32, 64)
             for i in tl.static_range((M * N) // 64):

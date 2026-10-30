@@ -202,3 +202,15 @@ def lanes_for(elem_bits):
     if VL_BITS % elem_bits != 0:
         raise ValueError(f"element width {elem_bits} does not divide {VL_BITS} bits")
     return VL_BITS // elem_bits
+
+
+def check_vsstb_stride(stride, elem_bits, what="vsstb"):
+    """Validate the positive, 32-byte-block-aligned immediate element stride."""
+    if type(stride) is not int or stride <= 0:
+        raise ValueError(f"{what} stride must be a positive compile-time integer")
+    if elem_bits not in (8, 16, 32):
+        raise ValueError(f"{what} requires 8-, 16-, or 32-bit elements")
+    block = 256 // elem_bits
+    if stride % block or stride // block > 0xffff:
+        raise ValueError(f"{what} stride must be a multiple of the 32B block size and fit 16 bits")
+    return stride

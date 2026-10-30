@@ -92,6 +92,10 @@ __all__ = [
     "POS",
     "vlds",
     "vsts",
+    "vsstb",
+    "vsub",
+    "vor",
+    "vmins",
     "vextf",
     "vintlv",
     "vdintlv",
@@ -155,6 +159,7 @@ _ELEM_SPECS = {
     "f16": 16,
     "f32": 32,
     "fp8e4nv": 8,
+    "fp8e5": 8,
 }
 
 # String spellings accepted by vbitcast()/vdup(), resolved to the canonical
@@ -163,6 +168,7 @@ _ELEM_SPECS = {
 # objects) so this module does not evaluate tl.<dtype> at import time
 # (extension/__init__ imports simd while triton.language is still initializing).
 _DTYPE_ALIASES = {
+    "fp8e5": "fp8e5",
     # TLA / C-like short spellings
     "i8": "int8",
     "i16": "int16",
@@ -196,7 +202,7 @@ _DTYPE_ALIASES = {
 }
 
 
-class MODE(enum.Enum):
+class MODE(str, enum.Enum):
     """Predicate mode for the SIMD register ops.
 
     Both modes are forwarded unchanged to the TLA C++ builder, which lowers
@@ -216,6 +222,9 @@ class MODE(enum.Enum):
 
     ZEROING = "MODE_ZEROING"
     MERGING = "MODE_MERGING"
+
+    def __str__(self):
+        return self.value
 
 
 _MODE_ZEROING_ALIASES = ("MODE_ZEROING", "ZEROING")
@@ -326,6 +335,7 @@ def _elem_tag(dtype_):
     """
     name = str(_unwrap_if_constexpr(dtype_))
     tag = {
+        "fp8e5": "fp8e5",
         "fp8e4nv": "fp8e4nv",
         "float8e4nv": "fp8e4nv",
         "fp8e4m3fn": "fp8e4nv",
@@ -501,7 +511,7 @@ def _check_mode(mode):
 # vexp's ftz_false tier would need the multi-op vexp_1ulp_ftz_false algorithm;
 # it has no committed AVE lowering yet, so it is rejected explicitly instead of
 # silently falling back to the FTZ hardware instruction.
-_PRECISION_HW = ("FTZ_TRUE",)
+_PRECISION_HW = ("FTZ_TRUE", )
 _PRECISION_VDIV_EXACT = ("EXACT", "VDIV_0ULP_FTZ_TRUE")
 _PRECISION_VEXP_FTZ_FALSE = ("FTZ_FALSE", "VEXP_1ULP_FTZ_FALSE")
 
@@ -521,15 +531,13 @@ def _normalize_precision(precision, op):
     if op == "vdiv" and name in _PRECISION_VDIV_EXACT:
         return "exact"
     if op == "vexp" and name in _PRECISION_VEXP_FTZ_FALSE:
-        raise NotImplementedError(
-            f"{op}: precision={precision!r} needs TileLang's "
-            "vexp_1ulp_ftz_false algorithm (exp(x/2)^2 + a subnormal-boundary "
-            "select); it has no AVE IR representation yet, so it is rejected "
-            "instead of emitting the FTZ hardware instruction. supported: "
-            "precision=None, 'ftz_true'")
+        raise NotImplementedError(f"{op}: precision={precision!r} needs TileLang's "
+                                  "vexp_1ulp_ftz_false algorithm (exp(x/2)^2 + a subnormal-boundary "
+                                  "select); it has no AVE IR representation yet, so it is rejected "
+                                  "instead of emitting the FTZ hardware instruction. supported: "
+                                  "precision=None, 'ftz_true'")
     raise ValueError(f"{op}: invalid precision {precision!r}; "
-                     f"supported: None, 'ftz_true'" + (
-                         ", 'exact'/'vdiv_0ulp_ftz_true'" if op == "vdiv" else ""))
+                     f"supported: None, 'ftz_true'" + (", 'exact'/'vdiv_0ulp_ftz_true'" if op == "vdiv" else ""))
 
 
 def _is_unsigned(dtype_):
@@ -778,9 +786,7 @@ def _binary(name, lhs, rhs, _semantic, mask=None, mode=MODE.ZEROING):
     mode = _check_mode(mode)
     lanes = lhs.shape[0]
     mask = _resolve_mask(mask, lanes, _semantic)
-    handle = _semantic.builder.create_simd_binary(name, lhs.handle, rhs.handle,
-                                                  mask.handle,
-                                                  _MODE_BUILDER_NAMES[mode])
+    handle = _semantic.builder.create_simd_binary(name, lhs.handle, rhs.handle, mask.handle, _MODE_BUILDER_NAMES[mode])
     return vector(handle, lhs.type)
 
 
@@ -940,15 +946,12 @@ def vdiv(src0, src1, mask=None, mode=MODE.ZEROING, precision=None, _semantic=Non
         # TileLang's fp32-only precise path.  Reject other dtypes before the
         # builder so the failure is a clear ValueError, not a missing symbol.
         if tag != "f32":
-            raise ValueError(
-                f"vdiv: precision={precision!r} requires float32 operands "
-                f"(got {src0.dtype}); non-fp32 always uses the hardware instruction")
-        handle = _semantic.builder.create_simd_binary(
-            "divfhp", src0.handle, src1.handle, mask.handle, mode_name)
+            raise ValueError(f"vdiv: precision={precision!r} requires float32 operands "
+                             f"(got {src0.dtype}); non-fp32 always uses the hardware instruction")
+        handle = _semantic.builder.create_simd_binary("divfhp", src0.handle, src1.handle, mask.handle, mode_name)
         return vector(handle, src0.type)
     kind = "divu" if unsigned else "div"
-    handle = _semantic.builder.create_simd_binary(kind, src0.handle, src1.handle,
-                                                  mask.handle, mode_name)
+    handle = _semantic.builder.create_simd_binary(kind, src0.handle, src1.handle, mask.handle, mode_name)
     res = vector(handle, src0.type)
     # The 16/32-bit unsigned division software sequence computes its quotient
     # under PAT_ALL and returns it unchanged for MODE_ZEROING, so inactive lanes
@@ -977,8 +980,7 @@ def _minmax(op, signed_kind, unsigned_kind, src0, src1, mask, mode, _semantic):
     lanes = src0.shape[0]
     mask = _resolve_mask(mask, lanes, _semantic)
     kind = unsigned_kind if unsigned else signed_kind
-    handle = _semantic.builder.create_simd_binary(kind, src0.handle, src1.handle,
-                                                  mask.handle,
+    handle = _semantic.builder.create_simd_binary(kind, src0.handle, src1.handle, mask.handle,
                                                   _MODE_BUILDER_NAMES[mode])
     return vector(handle, src0.type)
 
@@ -1059,9 +1061,8 @@ def vmaxs(src0, scalar, mask=None, mode=MODE.ZEROING, _semantic=None) -> vector:
     mask = _resolve_mask(mask, lanes, _semantic)
     scalar_handle = _make_scalar(scalar, src0.dtype, tag, "vmaxs", _semantic)
     kind = "umaxs" if unsigned else "maxs"
-    handle = _semantic.builder.create_simd_binary_scalar(
-        kind, src0.handle, scalar_handle, mask.handle,
-        _MODE_BUILDER_NAMES[mode])
+    handle = _semantic.builder.create_simd_binary_scalar(kind, src0.handle, scalar_handle, mask.handle,
+                                                         _MODE_BUILDER_NAMES[mode])
     return vector(handle, src0.type)
 
 
@@ -1093,8 +1094,7 @@ def vexp(src, mask=None, mode=MODE.ZEROING, precision=None, _semantic=None) -> v
     _require_elem_support("vexp", tag, _is_unsigned(src.dtype))
     lanes = src.shape[0]
     mask = _resolve_mask(mask, lanes, _semantic)
-    handle = _semantic.builder.create_simd_unary("exp", src.handle, mask.handle,
-                                                 _MODE_BUILDER_NAMES[mode])
+    handle = _semantic.builder.create_simd_unary("exp", src.handle, mask.handle, _MODE_BUILDER_NAMES[mode])
     return vector(handle, src.type)
 
 
@@ -1134,9 +1134,7 @@ def vdup(scalar, dtype, mask=None, mode=MODE.ZEROING, _semantic=None) -> vector:
     lanes = _lanes_for(tag)
     mask = _resolve_mask(mask, lanes, _semantic)
     scalar_handle = _make_scalar(scalar, dtype_obj, tag, "vdup", _semantic)
-    handle = _semantic.builder.create_simd_vdup(scalar_handle, tag, lanes,
-                                                mask.handle,
-                                                _MODE_BUILDER_NAMES[mode])
+    handle = _semantic.builder.create_simd_vdup(scalar_handle, tag, lanes, mask.handle, _MODE_BUILDER_NAMES[mode])
     return vector(handle, vector_type(lanes, dtype_obj))
 
 
@@ -1181,17 +1179,72 @@ def vdupv(src, mask=None, pos=POS.LOWEST, mode=MODE.ZEROING, _semantic=None) -> 
     lanes = src.shape[0]
     mask = _resolve_mask(mask, lanes, _semantic)
     low = _resolve_pos(pos)
-    handle = _semantic.builder.create_simd_vbroadcast(
-        src.handle, mask.handle, low, _MODE_BUILDER_NAMES[mode])
+    handle = _semantic.builder.create_simd_vbroadcast(src.handle, mask.handle, low, _MODE_BUILDER_NAMES[mode])
     return vector(handle, src.type)
 
 
 @builtin
-def vxor(lhs, rhs, _semantic=None) -> vector:
+def vxor(lhs, rhs, mask=None, mode=MODE.ZEROING, _semantic=None) -> vector:
     """
     Elementwise bitwise XOR (``ave.hir.vxor``) under an all-true mask.
     """
-    return _binary("xor", lhs, rhs, _semantic)
+    return _masked_binary("xor", lhs, rhs, mask, mode, _semantic)
+
+
+@builtin
+def vsub(lhs, rhs, mask=None, mode=MODE.ZEROING, _semantic=None) -> vector:
+    """Elementwise vector subtract under an optional predicate."""
+    return _masked_binary("sub", lhs, rhs, mask, mode, _semantic)
+
+
+@builtin
+def vor(lhs, rhs, mask=None, mode=MODE.ZEROING, _semantic=None) -> vector:
+    """Elementwise bitwise OR under an optional predicate."""
+    return _masked_binary("or", lhs, rhs, mask, mode, _semantic)
+
+
+@builtin
+def vmins(src, scalar, mask=None, mode=MODE.ZEROING, _semantic=None) -> vector:
+    """Vector-scalar minimum, preserving src on inactive MERGING lanes."""
+    _require_vector(src, "src")
+    tag = _elem_tag(src.dtype)
+    if tag not in ("i8", "i16", "i32", "f16", "f32"):
+        raise ValueError(f"vmins does not support {src.dtype} registers")
+    mode = _resolve_mode(mode)
+    mask = _mask_for(mask, src.type.lanes, _semantic)
+    scalar_handle = _make_scalar(scalar, src.dtype, tag, "vmins", _semantic)
+    handle = _semantic.builder.create_simd_binary_scalar("umins" if _is_unsigned(src.dtype) else "mins", src.handle,
+                                                         scalar_handle, mask.handle)
+    result = vector(handle, src.type)
+    zero = vfull(0, src.dtype, src.type.lanes, _semantic=_semantic)
+    return vsel(mask, result, src if mode == "MERGING" else zero, _semantic=_semantic)
+
+
+@builtin
+def vsstb(src, dst, stride, mask=None, update=False, _semantic=None):
+    """Store a vector to a 2-D UB buffer in 32-byte blocks at element stride."""
+    if isinstance(dst, buffer_access):
+        dst, offsets = dst.buffer, list(dst.indices)
+    elif isinstance(dst, buffer):
+        offsets = [0] * len(dst.shape)
+    else:
+        raise TypeError("vsstb expects a tla.buffer or subscripted buffer")
+    if dst.space != "ub" or len(dst.shape) != 2 or len(offsets) != 2:
+        raise ValueError("vsstb requires a two-dimensional UB buffer and two indices")
+    update = _unwrap_if_constexpr(update)
+    if type(update) is not bool:
+        raise ValueError("vsstb update must be a compile-time bool")
+    if update:
+        raise NotImplementedError("vsstb update=True is not supported")
+    _require_vector(src, "src")
+    tag = _elem_tag(src.dtype)
+    if src.dtype != dst.dtype:
+        raise ValueError("vsstb source and destination element dtypes must match")
+    stride = ss.check_vsstb_stride(_unwrap_if_constexpr(stride), _ELEM_SPECS[tag])
+    ss.check_total_bits(src.type.lanes, _ELEM_SPECS[tag], "vsstb")
+    mask = _mask_for(mask, src.type.lanes, _semantic)
+    base, indices = _resolve_base_and_indices(dst, offsets, _semantic)
+    _semantic.builder.create_simd_vsstb(base, indices, stride, src.handle, mask.handle)
 
 
 @builtin

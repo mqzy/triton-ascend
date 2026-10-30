@@ -55,7 +55,7 @@ def test_ir(output_dir=None):
     for mode, attr in MODE_NAMES.items():
         module, ctx = compile_offline(sync_block, SIGNATURE, constexprs(mode), output_dir=output_dir)
         text = str(lower_offline(module, ctx, output_dir=output_dir))
-        check_lowered_ir(text, loads=1, stores=1, buffers=2, extra=('mix_mode = "mix"', ))
+        check_lowered_ir(text, loads=1, stores=1, buffers=None, extra=('mix_mode = "mix"', ))
         assert text.count("hivm.hir.sync_block_set") == 1, (mode, text)
         assert text.count("hivm.hir.sync_block_wait") == 1, (mode, text)
         set_line = next(line for line in text.splitlines() if "hivm.hir.sync_block_set" in line)

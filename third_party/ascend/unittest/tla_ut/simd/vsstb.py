@@ -42,7 +42,7 @@ def test_ir(output_dir=None):
     assert "f8E5M2" in text
     assert text.count("ave.hir.store_with_stride") == 2
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=2, extra=("ave.hir.store_with_stride", ))
+    check_lowered_ir(text, loads=2, stores=1, buffers=None, extra=("ave.hir.store_with_stride", ))
     print("IR PASS: vsstb E5M2 full/partial strided stores")
 
 

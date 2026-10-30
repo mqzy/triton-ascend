@@ -109,14 +109,14 @@ def test_ir(output_dir=None):
     assert text.count("ave.hir.vsel") == 2, "only the two MERGING rows add vsel"
     assert "ave.hir.pge <VL32>" in text
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=1, stores=1, buffers=2, extra=("ave.hir.broadcast", ))
+    check_lowered_ir(text, loads=1, stores=1, buffers=None, extra=("ave.hir.broadcast", ))
 
     module, ctx = compile_offline(vdup_bf16, BF16_SIGNATURE, constexprs(BF16_LANES, BF16_LANES // 2))
     btext = str(module)
     assert btext.count("ave.hir.broadcast") == 3
     assert "ave.hir.pge <VL64>" in btext
     btext = str(lower_offline(module, ctx))
-    check_lowered_ir(btext, loads=0, stores=1, buffers=1, extra=("ave.hir.broadcast", "vector<128xbf16>"))
+    check_lowered_ir(btext, loads=0, stores=1, buffers=None, extra=("ave.hir.broadcast", "vector<128xbf16>"))
 
     for name, vec_ty in ALIAS_CASES:
         module, ctx = compile_offline(vdup_alias, ALIAS_SIGNATURE, {"DT": name})

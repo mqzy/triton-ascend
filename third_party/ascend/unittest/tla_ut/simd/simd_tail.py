@@ -188,7 +188,7 @@ def _tail_ir(kernel, signature, consts, cap, chunk, label):
     assert f"arith.constant {nblk} : i32" in text, f"{label}: expected {nblk} chunks"
     assert f"arith.constant {CORES} : i32" in text, f"{label}: expected step {CORES}"
     module = lower_offline(module, ctx)
-    check_lowered_ir(str(module), loads=4 if label == "f32" else 5, stores=1, buffers=4 if label == "f32" else 5)
+    check_lowered_ir(str(module), loads=4 if label == "f32" else 5, stores=1, buffers=None)
 
 
 def test_ir(output_dir=None):

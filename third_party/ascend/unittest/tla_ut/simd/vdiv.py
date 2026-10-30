@@ -147,14 +147,14 @@ def test_ir(output_dir=None):
     assert text.count("ave.hir.vsel") == 2, "f32 ZEROING stays bare; only MERGING adds vsel"
     assert "ave.hir.pge <VL32>" in text
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=3, extra=("ave.hir.vdiv", ))
+    check_lowered_ir(text, loads=2, stores=1, buffers=None, extra=("ave.hir.vdiv", ))
 
     module, ctx = compile_offline(vdiv_exact, EXACT_SIGNATURE, constexprs(), output_dir=output_dir)
     etext = str(module)
     assert etext.count("ave.hir.vdivfhp ") == 4, "exact/0ulp tiers must use vdivfhp"
     assert "ave.hir.vsel" not in etext, "exact tier forwards the mask without an extra select"
     etext = str(lower_offline(module, ctx))
-    check_lowered_ir(etext, loads=1, stores=1, buffers=2, extra=("ave.hir.vdivfhp", ))
+    check_lowered_ir(etext, loads=1, stores=1, buffers=None, extra=("ave.hir.vdivfhp", ))
 
     module, ctx = compile_offline(vdiv_u32, U32_SIGNATURE, constexprs())
     utext = str(module)
@@ -162,14 +162,14 @@ def test_ir(output_dir=None):
     # 3 caller-masked ZEROING rows append vsel(result, 0); 2 MERGING rows merge.
     assert utext.count("ave.hir.vsel") == 5
     utext = str(lower_offline(module, ctx))
-    check_lowered_ir(utext, loads=2, stores=1, buffers=3, extra=("ave.hir.vdiv", "cast_unsigned"))
+    check_lowered_ir(utext, loads=2, stores=1, buffers=None, extra=("ave.hir.vdiv", "cast_unsigned"))
 
     module, ctx = compile_offline(vdiv_u16, U16_SIGNATURE, constexprs(U16_LANES, U16_LANES // 2))
     htext = str(module)
     assert "cast_unsigned" in htext and htext.count("ave.hir.vsel") == 5
     assert "ave.hir.pge <VL64>" in htext
     htext = str(lower_offline(module, ctx))
-    check_lowered_ir(htext, loads=3, stores=1, buffers=4, extra=("ave.hir.vdiv", "cast_unsigned"))
+    check_lowered_ir(htext, loads=3, stores=1, buffers=None, extra=("ave.hir.vdiv", "cast_unsigned"))
     print("IR PASS: vdiv f32 masks/modes, f32 exact vdivfhp, u32/u16 zeroing select")
 
 

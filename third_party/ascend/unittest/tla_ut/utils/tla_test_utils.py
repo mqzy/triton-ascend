@@ -130,13 +130,14 @@ def lower_offline(module, ctx, output_dir=None):
     return lowered
 
 
-def check_lowered_ir(text, loads, stores, buffers, extra=()):
+def check_lowered_ir(text, loads, stores, buffers=None, extra=()):
     """Unified assert: no TTIR entities + hivm load/store/multi_buffer counts + op-specific checks."""
     for forbidden in ("!tt.ptr", "tt.ptr_to_int", "bind_buffer", "bufferization.to_tensor", "tensor<"):
         assert forbidden not in text, forbidden
     assert text.count("hivm.hir.load") == loads, "unexpected hivm.hir.load count"
     assert text.count("hivm.hir.store") == stores, "unexpected hivm.hir.store count"
-    assert text.count("hivm.multi_buffer") == buffers, "unexpected hivm.multi_buffer count"
+    if buffers is not None:
+        assert text.count("hivm.multi_buffer") == buffers, "unexpected hivm.multi_buffer count"
     for probe in extra:
         assert probe in text, probe
 

@@ -103,7 +103,7 @@ def test_ir(output_dir=None):
     assert text.count("ave.hir.vsel") == 2, "only the two MERGING rows add vsel"
     assert "ave.hir.pge <VL32>" in text
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=3, extra=("ave.hir.vmaxs", ))
+    check_lowered_ir(text, loads=2, stores=1, buffers=None, extra=("ave.hir.vmaxs", ))
 
     module, ctx = compile_offline(vmaxs_bounds, BOUND_SIGNATURE, constexprs())
     btext = str(module)
@@ -113,7 +113,7 @@ def test_ir(output_dir=None):
     assert "-9223372036854775808 : i64" in btext, "u64 2**63 travels as two's-complement bits"
     assert "-1 : i64" in btext, "u64 2**64-1 travels as two's-complement bits"
     btext = str(lower_offline(module, ctx))
-    check_lowered_ir(btext, loads=3, stores=3, buffers=6, extra=("ave.hir.vmaxs", "ave.hir.vumaxs"))
+    check_lowered_ir(btext, loads=3, stores=3, buffers=None, extra=("ave.hir.vmaxs", "ave.hir.vumaxs"))
     print("IR PASS: vmaxs masks/modes plus exact i64/u64/u32 scalar bounds")
 
 

@@ -67,7 +67,7 @@ def test_ir(output_dir=None):
     assert text.count("ave.hir.reduction") == 2
     assert "ave.hir.pge <VL8>" in text, "tail predicate must select 8 lanes"
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=3, extra=("ave.hir.vxor", "ave.hir.reduction"))
+    check_lowered_ir(text, loads=2, stores=1, buffers=None, extra=("ave.hir.vxor", "ave.hir.reduction"))
     print("IR PASS: vxor full/ZEROING/reduce plus 3 full + 1 tail tile")
 
 

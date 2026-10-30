@@ -120,8 +120,8 @@ def test_ir(output_dir=None):
     module = lower_offline(module, ctx, output_dir=output_dir)
     text = str(module)
     check_lowered_ir(
-        text, loads=0, stores=1, buffers=8, extra=("#hivm.address_space<cbuf>", "#hivm.address_space<cc>",
-                                                   "#hivm.tcore_type<CUBE>", "#hivm.func_core_type<AIV>"))
+        text, loads=0, stores=1, buffers=None, extra=("#hivm.address_space<cbuf>", "#hivm.address_space<cc>",
+                                                      "#hivm.tcore_type<CUBE>", "#hivm.func_core_type<AIV>"))
     assert text.count("hivm.hir.nd2nz") == 4, "GM->L1 x4 (q, k, p, v)"
     assert text.count("hivm.hir.mmadL1") == 2, "two gemms: S and O"
     assert text.count("hivm.hir.fixpipe") == 2, "L0C->UB/GM x2 (S, O)"

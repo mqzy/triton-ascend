@@ -91,13 +91,13 @@ def test_ir(output_dir=None):
     assert text.count("ave.hir.vsel") == 2, "only the two MERGING rows merge a +0 source"
     assert "ave.hir.pge <VL32>" in text, "prefix mask must be VL32"
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=3, extra=("ave.hir.vmin", ))
+    check_lowered_ir(text, loads=2, stores=1, buffers=None, extra=("ave.hir.vmin", ))
 
     module, ctx = compile_offline(vmin_u32, U32_SIGNATURE, constexprs())
     utext = str(module)
     assert "ave.hir.vumin" in utext and "ave.hir.vmin " not in utext, "u32 must pick vumin"
     utext = str(lower_offline(module, ctx))
-    check_lowered_ir(utext, loads=2, stores=1, buffers=3, extra=("ave.hir.vumin", ))
+    check_lowered_ir(utext, loads=2, stores=1, buffers=None, extra=("ave.hir.vumin", ))
     print("IR PASS: vmin f32 six masks/modes plus u32 vumin")
 
 

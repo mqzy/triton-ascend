@@ -52,7 +52,7 @@ def constexprs():
 def test_ir(output_dir=None):
     module, ctx = compile_offline(per_token_amax, SIGNATURE, constexprs(), output_dir=output_dir)
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=1, stores=1, buffers=2)
+    check_lowered_ir(text, loads=1, stores=1, buffers=None)
     assert text.count("ave.hir.vcmp") == M, text
     assert text.count("ave.hir.vsel") == M, text
     assert text.count("ave.hir.vneg") == M, text

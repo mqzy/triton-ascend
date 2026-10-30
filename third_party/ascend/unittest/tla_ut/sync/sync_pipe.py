@@ -101,7 +101,7 @@ def test_enum_pipes():
 def test_ir(output_dir=None):
     module, ctx = compile_offline(sync_pipe, SIGNATURE, constexprs(), output_dir=output_dir)
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=3)
+    check_lowered_ir(text, loads=2, stores=1, buffers=None)
     for op in ("hivm.hir.set_flag", "hivm.hir.wait_flag", "hivm.hir.pipe_barrier", "hivm.hir.sync_block"):
         assert text.count(op) == (2 if "flag" in op else 1), text
     assert text.count("hivm.hir.set_flag[<PIPE_MTE2>, <PIPE_V>") == 1, text

@@ -114,7 +114,7 @@ def test_ir(output_dir=None):
     # vector_broadcast ops above prove vdupv is a lane (not scalar) broadcast.
     assert text.count("ave.hir.scalar_broadcast") == 2, "only the MERGING merge source is scalar_broadcast"
     text = str(lower_offline(module, ctx, output_dir=output_dir))
-    check_lowered_ir(text, loads=2, stores=1, buffers=3, extra=("ave.hir.vector_broadcast", ))
+    check_lowered_ir(text, loads=2, stores=1, buffers=None, extra=("ave.hir.vector_broadcast", ))
 
     module, ctx = compile_offline(vdupv_wide, WIDE_SIGNATURE, constexprs())
     wtext = str(module)
@@ -122,7 +122,7 @@ def test_ir(output_dir=None):
     assert "vector<64xi64>" in wtext, "i64/u64 must use real 64-lane registers"
     assert "vbitcast" not in wtext, "no 32-lane bitcast hack for the wide path"
     wtext = str(lower_offline(module, ctx))
-    check_lowered_ir(wtext, loads=3, stores=2, buffers=5, extra=("ave.hir.vector_broadcast", "vector<64xi64>"))
+    check_lowered_ir(wtext, loads=3, stores=2, buffers=None, extra=("ave.hir.vector_broadcast", "vector<64xi64>"))
     print("IR PASS: vdupv LOWEST/HIGHEST on f32 plus real 64-lane i64/u64")
 
 

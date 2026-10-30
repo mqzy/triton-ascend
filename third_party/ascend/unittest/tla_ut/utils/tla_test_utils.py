@@ -14,6 +14,7 @@ otherwise ir only.
 import os
 import re
 from pathlib import Path
+import pytest
 
 from triton.language.extra.tla.compiler import ast_to_ttir, lower_ttir
 from triton._C.libtriton import ir, buffer_ir, passes
@@ -138,3 +139,18 @@ def check_compile_artifacts():
         if artifacts:
             return [str(p) for p in artifacts[:5]]
     return []
+
+
+def check_kernel_binary(kernel):
+    """Verify the binary and artifact belonging to this exact specialization."""
+    binary = kernel.asm.get("npubin")
+    assert isinstance(binary, bytes) and binary, "kernel did not produce an NPU binary"
+    paths = [Path(path) for name, path in kernel.metadata_group.items() if name.endswith((".npubin", ".o"))]
+    assert paths, "kernel metadata contains no .npubin/.o artifact"
+    assert any(path.is_file() and path.read_bytes() == binary
+               for path in paths), ("generated binary is missing or differs from this kernel's cache artifact")
+    print("COMPILE PASS:", kernel.name, "->", ", ".join(str(path) for path in paths))
+
+
+def matrix(cases):
+    return pytest.mark.parametrize("case", cases, ids=[case["name"] for case in cases])

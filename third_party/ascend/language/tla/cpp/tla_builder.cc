@@ -39,6 +39,7 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/StringMap.h"
 
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -167,6 +168,42 @@ MemRefLayoutAttrInterface tlaBufferLayout(MLIRContext *ctx,
                                 strides);
 }
 
+void checkDmaBuffers(Value src, Value dst) {
+  if (!isa<MemRefType>(src.getType()) || !isa<MemRefType>(dst.getType()))
+    throw std::invalid_argument("TLA DMA requires memref operands");
+}
+
+void setDmaAttrs(Operation *op, const py::dict &attrs) {
+  for (auto item : attrs)
+    if (!item.second.is_none())
+      op->setAttr(py::cast<std::string>(item.first),
+                  py::cast<Attribute>(item.second));
+}
+
+Value dmaIndexOperand(TLABuilder &self, Value value) {
+  if (value && !value.getType().isIndex())
+    return self.create<arith::IndexCastOp>(self.getBuilder().getIndexType(),
+                                           value);
+  return value;
+}
+
+// UnitFlag encoding belongs to native op construction. MMAD and Fixpipe
+// share the backend enum mapping without exposing an attribute factory.
+void setUnitFlagAttrs(OpBuilder &builder, Operation *op,
+                      std::optional<int32_t> control,
+                      std::optional<int64_t> groupId) {
+  if (control) {
+    auto mode = hivm::symbolizeUNIT_FLAG(static_cast<uint32_t>(*control));
+    if (!mode)
+      throw std::invalid_argument("unknown HIVM UnitFlag mode: " +
+                                  std::to_string(*control));
+    op->setAttr("unit_flag_mode", builder.getArrayAttr({hivm::UnitFlagAttr::get(
+                                      builder.getContext(), *mode)}));
+  }
+  if (groupId)
+    op->setAttr("unit_flag_group_id", builder.getI64IntegerAttr(*groupId));
+}
+
 // Static rank-reshape pieces: memref.collapse_shape / expand_shape with an
 // explicit reassociation (groups of source dims per result dim).  The
 // decomposition logic lives in the Python frontend (tla.reshape); these
@@ -264,13 +301,14 @@ void init_tla_builder(py::module &&m) {
           py::arg("mode"), py::arg("pipe"), py::arg("flag"))
       .def(
           "create_tla_block_wait_flag",
-          [](TLABuilder &self, const std::string &pipe, int64_t flag) {
-            createBlockSync(
-                self, pipe, flag,
-                hivm::SyncBlockInstrMode::INTER_BLOCK_SYNCHRONIZATION,
-                /*isSet=*/false);
+          [](TLABuilder &self, const std::string &pipe, int64_t flag,
+             int64_t mode) {
+            createBlockSync(self, pipe, flag,
+                            static_cast<hivm::SyncBlockInstrMode>(
+                                checkSyncRange(mode, 2, "mode")),
+                            /*isSet=*/false);
           },
-          py::arg("pipe"), py::arg("flag"))
+          py::arg("pipe"), py::arg("flag"), py::arg("mode") = 0)
       // SIMD vector-register ops (AVE dialect, ave.hir.*).
       .def(
           "create_simd_vlds",
@@ -594,7 +632,8 @@ void init_tla_builder(py::module &&m) {
              if (!memorySpace) {
                // TLA frontend names -> HIVM #hivm.address_space mnemonics.
                static const llvm::StringMap<llvm::StringRef> kTlaToHivm = {
-                   {"l1", "cbuf"}, {"l0a", "ca"}, {"l0b", "cb"}, {"l0c", "cc"}};
+                   {"l1", "cbuf"}, {"l0a", "ca"},     {"l0b", "cb"},
+                   {"l0c", "cc"},  {"bt", "biasbuf"}, {"fb", "fixbuf"}};
                auto it = kTlaToHivm.find(space);
                if (it != kTlaToHivm.end())
                  memorySpace = hivm::symbolizeAddressSpace(it->second);
@@ -687,18 +726,129 @@ void init_tla_builder(py::module &&m) {
            py::arg("result_type"), py::arg("reassociation"))
       .def("create_tla_expand_shape", &createReshapeOp<memref::ExpandShapeOp>,
            py::arg("source"), py::arg("result_type"), py::arg("reassociation"))
+      // Each explicit DMA binding materializes one native HIVM operation.
+      .def(
+          "create_tla_load",
+          [](TLABuilder &self, Value src, Value dst, const py::dict &attrs,
+             std::optional<Value> padValue, std::optional<Value> leftPadding,
+             std::optional<Value> rightPadding) {
+            checkDmaBuffers(src, dst);
+            auto op = self.create<hivm::LoadOp>(
+                TypeRange{}, src, dst, hivm::PadModeAttr{},
+                padValue.value_or(Value{}),
+                dmaIndexOperand(self, leftPadding.value_or(Value{})),
+                dmaIndexOperand(self, rightPadding.value_or(Value{})));
+            setDmaAttrs(op, attrs);
+          },
+          py::arg("src"), py::arg("dst"), py::arg("attrs"),
+          py::arg("pad_value") = std::nullopt,
+          py::arg("left_padding_num") = std::nullopt,
+          py::arg("right_padding_num") = std::nullopt)
+      .def(
+          "create_tla_store",
+          [](TLABuilder &self, Value src, Value dst, const py::dict &attrs) {
+            checkDmaBuffers(src, dst);
+            auto op = self.create<hivm::StoreOp>(TypeRange{}, src, dst);
+            setDmaAttrs(op, attrs);
+          },
+          py::arg("src"), py::arg("dst"), py::arg("attrs"))
+      .def(
+          "create_tla_nd2nz",
+          [](TLABuilder &self, Value src, Value dst, const py::dict &attrs) {
+            checkDmaBuffers(src, dst);
+            auto op = self.create<hivm::ND2NZOp>(
+                TypeRange{}, src, dst, self.getBuilder().getUnitAttr());
+            setDmaAttrs(op, attrs);
+          },
+          py::arg("src"), py::arg("dst"), py::arg("attrs"))
+      .def(
+          "create_tla_copy",
+          [](TLABuilder &self, Value src, Value dst, const py::dict &attrs,
+             std::optional<Value> padValue) {
+            checkDmaBuffers(src, dst);
+            auto op = self.create<hivm::CopyOp>(TypeRange{}, src, dst);
+            if (padValue)
+              op.getPadValueMutable().assign(*padValue);
+            setDmaAttrs(op, attrs);
+          },
+          py::arg("src"), py::arg("dst"), py::arg("attrs"),
+          py::arg("pad_value") = std::nullopt)
+      .def("create_tla_l12ub",
+           [](TLABuilder &self, Value src, Value dst) {
+             checkDmaBuffers(src, dst);
+             self.create<hivm::L12UBOp>(TypeRange{}, src, dst);
+           })
+      .def("create_tla_l12bt",
+           [](TLABuilder &self, Value src, Value dst, Value n) {
+             checkDmaBuffers(src, dst);
+             self.create<hivm::L12BTOp>(TypeRange{}, src, dst,
+                                        dmaIndexOperand(self, n));
+           })
+      .def(
+          "create_tla_l12l0",
+          [](TLABuilder &self, Value src, Value dst, int64_t kPartIdx,
+             int64_t kPart, int64_t kPartCeil, int64_t kPartLoop,
+             int64_t kPartActual, int64_t m, bool isTransposed) {
+            checkDmaBuffers(src, dst);
+            auto &builder = self.getBuilder();
+            self.create<hivm::L12L0Op>(TypeRange{}, src, dst,
+                                       builder.getI64IntegerAttr(kPartIdx),
+                                       builder.getI64IntegerAttr(kPart),
+                                       builder.getI64IntegerAttr(kPartCeil),
+                                       builder.getI64IntegerAttr(kPartLoop),
+                                       builder.getI64IntegerAttr(kPartActual),
+                                       builder.getI64IntegerAttr(m),
+                                       builder.getBoolAttr(isTransposed));
+          },
+          py::arg("src"), py::arg("dst"), py::arg("k_part_idx"),
+          py::arg("k_part"), py::arg("k_part_ceil"), py::arg("k_part_loop"),
+          py::arg("k_part_actual"), py::arg("m"), py::arg("is_transposed"))
+      .def(
+          "create_tla_fixpipe",
+          [](TLABuilder &self, Value src, Value dst, const py::dict &attrs,
+             std::optional<Value> quantScale,
+             std::optional<int32_t> unitFlagCtrl,
+             std::optional<int64_t> unitFlagGroupId) {
+            checkDmaBuffers(src, dst);
+            auto &builder = self.getBuilder();
+            auto *ctx = builder.getContext();
+            auto op = self.create<hivm::FixpipeOp>(
+                TypeRange{}, src, dst,
+                hivm::FixpipeDMAModeAttr::get(ctx, hivm::FixpipeDMAMode::NZ2NZ),
+                hivm::FixpipeDualDstModeAttr{}, hivm::FixpipeSubBlockAttr{},
+                hivm::FixpipePreQuantModeAttr::get(
+                    ctx, hivm::FixpipePreQuantMode::NO_QUANT),
+                hivm::FixpipePreReluModeAttr::get(
+                    ctx, hivm::FixpipePreReluMode::NO_RELU),
+                builder.getBoolAttr(false), builder.getBoolAttr(true),
+                quantScale.value_or(Value{}));
+            setDmaAttrs(op, attrs);
+            setUnitFlagAttrs(builder, op, unitFlagCtrl, unitFlagGroupId);
+          },
+          py::arg("src"), py::arg("dst"), py::arg("attrs"),
+          py::arg("quant_scale") = std::nullopt,
+          py::arg("unit_flag_ctrl") = std::nullopt,
+          py::arg("unit_flag_group_id") = std::nullopt)
+      .def("create_tla_get_sub_block_idx",
+           [](TLABuilder &self) -> Value {
+             return self
+                 .create<hivm::GetSubBlockIdxOp>(self.getBuilder().getI64Type())
+                 .getResult();
+           })
+      .def("create_tla_set_ctrl",
+           [](TLABuilder &self, bool enable, int64_t idx) {
+             self.create<hivm::SetCtrlOp>(
+                 self.getBuilder().getBoolAttr(enable),
+                 self.getBuilder().getI64IntegerAttr(idx));
+           })
       .def("create_hivm_load",
            [](TLABuilder &self, Value src, Value dst) {
-             if (!isa<MemRefType>(src.getType()) ||
-                 !isa<MemRefType>(dst.getType()))
-               throw std::invalid_argument("TLA DMA requires memref operands");
+             checkDmaBuffers(src, dst);
              self.create<hivm::LoadOp>(TypeRange{}, src, dst);
            })
       .def("create_hivm_store",
            [](TLABuilder &self, Value src, Value dst) {
-             if (!isa<MemRefType>(src.getType()) ||
-                 !isa<MemRefType>(dst.getType()))
-               throw std::invalid_argument("TLA DMA requires memref operands");
+             checkDmaBuffers(src, dst);
              self.create<hivm::StoreOp>(TypeRange{}, src, dst);
            })
       // Print at the buffer stage: hivm.hir.debug accepts memref/scalar
@@ -718,9 +868,7 @@ void init_tla_builder(py::module &&m) {
       .def(
           "create_hivm_nd2nz",
           [](TLABuilder &self, Value src, Value dst) {
-            if (!isa<MemRefType>(src.getType()) ||
-                !isa<MemRefType>(dst.getType()))
-              throw std::invalid_argument("TLA DMA requires memref operands");
+            checkDmaBuffers(src, dst);
             self.create<hivm::ND2NZOp>(TypeRange{}, src, dst,
                                        self.getBuilder().getUnitAttr());
           },
@@ -731,9 +879,7 @@ void init_tla_builder(py::module &&m) {
       .def(
           "create_hivm_fixpipe",
           [](TLABuilder &self, Value src, Value dst, std::string &dma_mode) {
-            if (!isa<MemRefType>(src.getType()) ||
-                !isa<MemRefType>(dst.getType()))
-              throw std::invalid_argument("TLA DMA requires memref operands");
+            checkDmaBuffers(src, dst);
             auto &builder = self.getBuilder();
             auto *ctx = builder.getContext();
             auto dmaEnum = hivm::symbolizeFixpipeDMAMode(dma_mode);
@@ -758,7 +904,9 @@ void init_tla_builder(py::module &&m) {
       .def(
           "create_hivm_mmadl1",
           [](TLABuilder &self, Value a, Value b, Value c, bool init_condition,
-             int64_t real_m, int64_t real_k, int64_t real_n, bool transpose_b) {
+             int64_t real_m, int64_t real_k, int64_t real_n, bool transpose_b,
+             std::optional<int32_t> unitFlagCtrl,
+             std::optional<int64_t> unitFlagGroupId) {
             auto &builder = self.getBuilder();
             auto loc = self.getLastLoc();
             auto init = builder.create<arith::ConstantOp>(
@@ -767,15 +915,17 @@ void init_tla_builder(py::module &&m) {
             auto k = builder.create<arith::ConstantIndexOp>(loc, real_k);
             auto n = builder.create<arith::ConstantIndexOp>(loc, real_n);
             auto bTrans = transpose_b ? builder.getUnitAttr() : UnitAttr{};
-            self.create<hivm::MmadL1Op>(
+            auto op = self.create<hivm::MmadL1Op>(
                 TypeRange{}, a, b, init, m, k, n, c,
                 /*per_channel_bias=*/Value{}, /*a_transpose=*/UnitAttr{},
                 /*b_transpose=*/bTrans, /*enable_HF32=*/UnitAttr{},
                 /*enable_I4=*/UnitAttr{});
+            setUnitFlagAttrs(builder, op, unitFlagCtrl, unitFlagGroupId);
           },
           py::arg("a"), py::arg("b"), py::arg("c"), py::arg("init_condition"),
           py::arg("real_m"), py::arg("real_k"), py::arg("real_n"),
-          py::arg("transpose_b"))
+          py::arg("transpose_b"), py::arg("unit_flag_ctrl") = std::nullopt,
+          py::arg("unit_flag_group_id") = std::nullopt)
       .def("create_scope_op",
            [](TLABuilder &self, py::dict &scopeAttrs,
               std::vector<Type> resultTypes) -> OpState {

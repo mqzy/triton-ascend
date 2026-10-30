@@ -17,7 +17,9 @@ import enum
 
 from triton.language.core import builtin, _unwrap_if_constexpr, tensor, int64
 
-__all__ = ["barrier", "set_flag", "wait_flag", "sync_all", "block_set_flag", "block_wait_flag", "MODE", "PIPE"]
+__all__ = [
+    "barrier", "set_flag", "wait_flag", "sync_all", "block_set_flag", "block_wait_flag", "sub_block_id", "MODE", "PIPE"
+]
 
 
 class MODE(enum.Enum):
@@ -148,3 +150,9 @@ def block_wait_flag(mode, pipe, flagid, _semantic=None):
     :param flagid: flag ID in [0, 15], matching :func:`block_set_flag`
     """
     _semantic.builder.create_tla_block_wait_flag(_mode(mode), _pipe(pipe), _integer(flagid, "flagid", 15))
+
+
+@builtin
+def sub_block_id(_semantic=None):
+    """Index of the current AIV sub-block within its associated Cube block."""
+    return tensor(_semantic.builder.create_tla_get_sub_block_idx(), int64)

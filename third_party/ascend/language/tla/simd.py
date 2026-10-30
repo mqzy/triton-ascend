@@ -46,6 +46,10 @@ result shapes follow their AVE operation contracts.  Dist/part/
 pp/pge strings are validated by :mod:`simd_semantic`.
 """
 
+from __future__ import annotations
+
+import enum
+
 import triton.language as tl
 from .core import buffer, buffer_access, vector, vector_type
 from triton.language.core import builtin, tensor, _unwrap_if_constexpr
@@ -53,6 +57,8 @@ from triton.language.core import builtin, tensor, _unwrap_if_constexpr
 from . import simd_semantic as ss
 
 __all__ = [
+    "MODE",
+    "CMP",
     "vlds",
     "vsts",
     "vextf",
@@ -61,6 +67,8 @@ __all__ = [
     "vbitcast",
     "vmul",
     "vadd",
+    "vadds",
+    "vaddc",
     "vdiv",
     "vxor",
     "vmod",
@@ -71,6 +79,8 @@ __all__ = [
     "vrsqrt",
     "vexp",
     "vreduce",
+    "vcmax",
+    "vcmin",
     "vcmp",
     "vbroadcast",
     "vfull",
@@ -166,6 +176,74 @@ def _check_mask(mask, lanes):
     _require_vector(mask, "mask")
     if mask.dtype != tl.int1 or mask.type.lanes != lanes:
         raise ValueError(f"mask must be vector<{lanes}xint1>, got {mask.type}")
+
+
+class MODE(enum.Enum):
+    """Predicate handling mode for vector elementwise ops."""
+
+    ZEROING = "ZEROING"
+    MERGING = "MERGING"
+
+
+class CMP(enum.Enum):
+    """Compare type for :func:`vcmp`."""
+
+    EQ = "EQ"
+    NE = "NE"
+    GT = "GT"
+    GE = "GE"
+    LT = "LT"
+    LE = "LE"
+    UGT = "UGT"
+    UGE = "UGE"
+    ULT = "ULT"
+    ULE = "ULE"
+
+
+def _resolve_mode(mode):
+    """Normalize a MODE enum / string / constexpr into its canonical name."""
+    mode = _unwrap_if_constexpr(mode)
+    if isinstance(mode, MODE):
+        mode = mode.value
+    return ss.check_mode(mode)
+
+
+def _resolve_cmp(cmp_type):
+    """Normalize a CMP enum / string / constexpr into its canonical name."""
+    cmp_type = _unwrap_if_constexpr(cmp_type)
+    if isinstance(cmp_type, CMP):
+        cmp_type = cmp_type.value
+    return ss.check_cmp(cmp_type)
+
+
+def _mask_for(mask, lanes, _semantic):
+    """Return ``mask`` or an all-true mask register with ``lanes`` lanes."""
+    mask = _unwrap_if_constexpr(mask)
+    if mask is None:
+        return _all_mask(lanes, _semantic)
+    _check_mask(mask, lanes)
+    return mask
+
+
+def _is_unsigned(dtype_):
+    return str(dtype_).startswith("uint")
+
+
+def _masked_binary(kind, lhs, rhs, mask, mode, _semantic):
+    """Elementwise binary op under an explicit mask and predicate mode."""
+    _require_vector(lhs, "src0")
+    _require_vector(rhs, "src1")
+    if lhs.type != rhs.type:
+        raise ValueError(f"{kind} requires same-typed operands, "
+                         f"got {lhs.type} and {rhs.type}")
+    lanes = lhs.type.lanes
+    mode = _resolve_mode(mode)
+    mask = _mask_for(mask, lanes, _semantic)
+    handle = _semantic.builder.create_simd_binary(kind, lhs.handle, rhs.handle, mask.handle)
+    out = vector(handle, lhs.type)
+    if mode == "MERGING":
+        out = vsel(mask, out, lhs, _semantic=_semantic)
+    return out
 
 
 def _resolve_base_and_indices(ptr_or_buffer, offsets, _semantic):
@@ -366,12 +444,96 @@ def vmul(lhs, rhs, _semantic=None) -> vector:
 
 
 @builtin
-def vadd(lhs, rhs, _semantic=None) -> vector:
+def vadd(src0: vector, src1: vector, mask: vector = None, mode: tl.constexpr = MODE.ZEROING, _semantic=None) -> vector:
     """
-    Elementwise vector add (``ave.hir.vadd``) under an all-true
-    ``ave.hir.pge <ALL>`` mask.
+    Elementwise vector add (``ave.hir.vadd``).
+
+    :param src0: first vector register
+    :param src1: second vector register (same type as ``src0``)
+    :param mask: predicate register; defaults to an all-true mask
+    :param mode: ``MODE.ZEROING`` (default) or ``MODE.MERGING``.  MERGING
+        keeps ``src0`` on inactive lanes and is implemented as a select.
     """
-    return _binary("add", lhs, rhs, _semantic)
+    return _masked_binary("add", src0, src1, mask, mode, _semantic)
+
+
+def _scalar_handle(src, scalar, _semantic):
+    """Build or validate the scalar operand of a vector-scalar op."""
+    if isinstance(scalar, vector):
+        if scalar.shape[0] != 1:
+            raise ValueError(f"scalar register must have one lane, got {scalar.shape[0]}")
+        if scalar.dtype != src.dtype:
+            raise TypeError(f"scalar dtype {scalar.dtype} does not match src dtype "
+                            f"{src.dtype}")
+        return scalar.handle
+    if isinstance(scalar, tensor):
+        if len(scalar.shape) != 0:
+            raise ValueError(f"scalar must be rank-0, got shape {list(scalar.shape)}")
+        if str(scalar.dtype) != str(src.dtype):
+            raise TypeError(f"scalar dtype {scalar.dtype} does not match src dtype "
+                            f"{src.dtype}")
+        return scalar.handle
+    scalar = _unwrap_if_constexpr(scalar)
+    dtype = str(src.dtype)
+    if dtype.startswith(("int", "uint")):
+        if not isinstance(scalar, int) or isinstance(scalar, bool):
+            raise TypeError(f"scalar must be an integer for {dtype}, "
+                            f"got {type(scalar).__name__}")
+        bits = _ELEM_SPECS[_elem_tag(src.dtype)]
+        if dtype.startswith("uint"):
+            lo, hi = 0, (1 << bits) - 1
+        else:
+            lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+        if not lo <= scalar <= hi:
+            raise ValueError(f"scalar {scalar} does not fit in {dtype}")
+    elif not isinstance(scalar, (int, float)) or isinstance(scalar, bool):
+        raise TypeError(f"scalar must be numeric, got {type(scalar).__name__}")
+    return _semantic.builder.create_simd_scalar(_elem_tag(src.dtype), float(scalar))
+
+
+@builtin
+def vadds(src: vector, scalar, mask: vector = None, mode: tl.constexpr = MODE.ZEROING, _semantic=None) -> vector:
+    """
+    Elementwise vector-scalar add (``ave.hir.vadds``).
+
+    :param src: source vector register
+    :param scalar: Python scalar or rank-0 tensor of the register's dtype
+    :param mask: predicate register; defaults to an all-true mask
+    :param mode: ``MODE.ZEROING`` (default) or ``MODE.MERGING``
+    """
+    _require_vector(src, "src")
+    lanes = src.type.lanes
+    scalar_handle = _scalar_handle(src, scalar, _semantic)
+    mode = _resolve_mode(mode)
+    mask = _mask_for(mask, lanes, _semantic)
+    handle = _semantic.builder.create_simd_vec_scalar("adds", src.handle, scalar_handle, mask.handle)
+    out = vector(handle, src.type)
+    if mode == "MERGING":
+        out = vsel(mask, out, src, _semantic=_semantic)
+    return out
+
+
+@builtin
+def vaddc(src0: vector, src1: vector, mask: vector = None, _semantic=None) -> tuple[vector, vector]:
+    """
+    Vector add with carry-out (``vaddc``) for i32/u32 registers.
+
+    Returns ``(sum, carry)`` where ``sum = src0 + src1`` (modulo 2**32) and
+    ``carry`` is an i1 mask holding the two's-complement carry-out of each
+    lane, derived as ``sum <u src0``.  The AVE dialect has no dedicated
+    ``vaddc`` op, so the result is always zeroing.
+    """
+    dtype = str(src0.dtype)
+    if dtype not in ("int32", "uint32"):
+        raise ValueError(f"vaddc only supports int32/uint32, got {dtype}")
+    if src1.dtype != src0.dtype:
+        raise TypeError(f"vaddc operands must have the same dtype, "
+                        f"got {src0.dtype} and {src1.dtype}")
+    lanes = src0.type.lanes
+    mask = _mask_for(mask, lanes, _semantic)
+    total = _masked_binary("add", src0, src1, mask, MODE.ZEROING, _semantic)
+    carry = vcmp(total, src0, mask=mask, op=CMP.ULT, _semantic=_semantic)
+    return total, carry
 
 
 @builtin
@@ -469,42 +631,97 @@ def vexp(src, _semantic=None) -> vector:
 
 
 @builtin
-def vreduce(src, kind, _semantic=None) -> vector:
+def vreduce(src, kind, mask=None, _semantic=None) -> vector:
     """
     Horizontal reduction (``ave.hir.reduction``) of a vector register.
 
-    ``kind`` is ``add`` / ``min`` / ``max``; the combining result is placed at
-    the first lane (AVE reduction semantics).
+    ``kind`` is ``add`` / ``min`` / ``max`` / ``umin`` / ``umax``; the
+    combining result is placed at the first lane (AVE reduction semantics).
     """
     _require_vector(src, "src")
     kind = _unwrap_if_constexpr(kind)
-    if kind not in ("add", "min", "max"):
-        raise ValueError(f"reduce kind must be add/min/max, got {kind!r}")
-    lanes = src.shape[0]
-    mask = _all_mask(lanes, _semantic)
+    kind = str(kind).lower()
+    if kind not in ("add", "min", "max", "umin", "umax"):
+        raise ValueError(f"reduce kind must be add/min/max/umin/umax, got {kind!r}")
+    lanes = src.type.lanes
+    mask = _mask_for(mask, lanes, _semantic)
     handle = _semantic.builder.create_simd_vreduce(src.handle, mask.handle, kind)
     return vector(handle, src.type)
 
 
+def _reduce_horiz(op, src, kind, mask, mode, _semantic):
+    """Masked horizontal reduction shared by vcmax/vcmin."""
+    mode = _resolve_mode(mode)
+    if mode != "ZEROING":
+        raise NotImplementedError(f"{op} only supports MODE.ZEROING; MERGING needs a destination "
+                                  "register and is not exposed by the AVE dialect")
+    return vreduce(src, kind, mask=mask, _semantic=_semantic)
+
+
 @builtin
-def vcmp(lhs, rhs, cmp_type, _semantic=None) -> vector:
+def vcmax(src: vector, mask: vector = None, mode: tl.constexpr = MODE.ZEROING, _semantic=None) -> vector:
+    """
+    Horizontal max reduction (``vcmax`` -> ``ave.hir.reduction``).
+
+    The maximum is placed in lane 0 of the result register.  Unsigned integer
+    inputs use the ``umax`` combining kind.  Only ``MODE.ZEROING`` is
+    supported.
+    """
+    kind = "umax" if _is_unsigned(src.dtype) else "max"
+    return _reduce_horiz("vcmax", src, kind, mask, mode, _semantic)
+
+
+@builtin
+def vcmin(src: vector, mask: vector = None, mode: tl.constexpr = MODE.ZEROING, _semantic=None) -> vector:
+    """
+    Horizontal min reduction (``vcmin`` -> ``ave.hir.reduction``).
+
+    The minimum is placed in lane 0 of the result register.  Unsigned integer
+    inputs use the ``umin`` combining kind.  Only ``MODE.ZEROING`` is
+    supported.
+    """
+    kind = "umin" if _is_unsigned(src.dtype) else "min"
+    return _reduce_horiz("vcmin", src, kind, mask, mode, _semantic)
+
+
+_UNSIGNED_CMP = {
+    "GT": "UGT",
+    "GE": "UGE",
+    "LT": "ULT",
+    "LE": "ULE",
+}
+
+
+@builtin
+def vcmp(src0: vector, src1: vector, mask: vector = None, op: tl.constexpr = CMP.EQ, _semantic=None) -> vector:
     """
     Elementwise compare (``ave.hir.vcmp``) returning an i1 mask.
 
-    ``cmp_type`` is ``eq`` / ``ne`` / ``gt`` / ``ge`` / ``lt`` / ``le``.
+    :param src0: first vector register
+    :param src1: second vector register (same type as ``src0``)
+    :param mask: predicate register; defaults to an all-true mask
+    :param op: ``CMP`` value (EQ/NE/GT/GE/LT/LE plus the explicit unsigned
+        UGT/UGE/ULT/ULE variants).  For unsigned integer operands the ordered
+        comparisons are mapped to their unsigned counterparts automatically.
     """
-    _require_vector(lhs, "lhs")
-    _require_vector(rhs, "rhs")
-    cmp_type = _unwrap_if_constexpr(cmp_type)
-    cmp_type = str(cmp_type).upper()
-    if cmp_type not in ("EQ", "NE", "GT", "GE", "LT", "LE"):
-        raise ValueError(f"cmp_type must be eq/ne/gt/ge/lt/le, got {cmp_type!r}")
-    if lhs.type != rhs.type:
+    # Backwards compatibility: the old signature took the compare type as the
+    # third positional argument, e.g. vcmp(a, b, "ne").
+    if isinstance(_unwrap_if_constexpr(mask), (str, CMP)):
+        op, mask = mask, None
+    op = _resolve_cmp(op)
+    _require_vector(src0, "src0")
+    _require_vector(src1, "src1")
+    if src0.type != src1.type:
         raise ValueError("vcmp requires same-typed operands, "
-                         f"got {lhs.type} and {rhs.type}")
-    lanes = lhs.shape[0]
-    mask = _all_mask(lanes, _semantic)
-    handle = _semantic.builder.create_simd_vcmp(cmp_type, lhs.handle, rhs.handle, mask.handle)
+                         f"got {src0.type} and {src1.type}")
+    if op in ("UGT", "UGE", "ULT", "ULE"):
+        if not str(src0.dtype).startswith(("int", "uint")):
+            raise TypeError(f"{op} requires integer operands, got {src0.dtype}")
+    elif _is_unsigned(src0.dtype):
+        op = _UNSIGNED_CMP.get(op, op)
+    lanes = src0.type.lanes
+    mask = _mask_for(mask, lanes, _semantic)
+    handle = _semantic.builder.create_simd_vcmp(op, src0.handle, src1.handle, mask.handle)
     return vector(handle, vector_type(lanes, tl.int1))
 
 

@@ -37,9 +37,13 @@ __all__ = [
     "STORE_DISTS",
     "PGE_PATTERNS",
     "VCVT_PARTS",
+    "MODES",
+    "CMP_TYPES",
     "check_dist",
     "check_part",
     "check_pge_pattern",
+    "check_mode",
+    "check_cmp",
     "check_total_bits",
     "lanes_for",
 ]
@@ -121,6 +125,26 @@ PGE_PATTERNS = frozenset([
 # AVE VCVT_PartType whitelist (vextf part selector; assembly strings).
 VCVT_PARTS = frozenset(["part_even", "part_odd"])
 
+# Predicate handling modes.  The AVE register ops currently lower with
+# MODE_ZEROING; MERGING is accepted by the frontend and emulated with a select
+# for elementwise ops (inactive lanes keep the first source operand).
+MODES = frozenset(["ZEROING", "MERGING"])
+
+# AVE CmpType whitelist.  The unsigned variants compare the raw integer bit
+# pattern and are used by vaddc and by unsigned integer operands.
+CMP_TYPES = frozenset([
+    "EQ",
+    "NE",
+    "GT",
+    "GE",
+    "LT",
+    "LE",
+    "UGT",
+    "UGE",
+    "ULT",
+    "ULE",
+])
+
 
 def check_dist(dist, whitelist, what="load"):
     """Validate a distribution string against a whitelist; return it unchanged."""
@@ -145,6 +169,23 @@ def check_pge_pattern(pattern):
         allowed = ", ".join(sorted(PGE_PATTERNS))
         raise ValueError(f"invalid pge pattern {pattern!r}: expected one of [{allowed}]")
     return pattern
+
+
+def check_mode(mode):
+    """Validate a predicate mode; return its uppercase canonical form."""
+    mode = str(mode).upper()
+    if mode not in MODES:
+        raise ValueError(f"invalid predicate mode {mode!r}: expected ZEROING/MERGING")
+    return mode
+
+
+def check_cmp(cmp_type):
+    """Validate a compare type; return its uppercase canonical form."""
+    cmp_type = str(cmp_type).upper()
+    if cmp_type not in CMP_TYPES:
+        allowed = ", ".join(sorted(CMP_TYPES))
+        raise ValueError(f"invalid cmp type {cmp_type!r}: expected one of [{allowed}]")
+    return cmp_type
 
 
 def check_total_bits(lanes, elem_bits, what="vector"):
